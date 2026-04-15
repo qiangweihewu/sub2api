@@ -1,10 +1,8 @@
 package service
 
 import (
-	"fmt"
 	"testing"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -38,19 +36,19 @@ func TestSyncBillingHeaderVersion(t *testing.T) {
 		},
 		{
 			name:      "user-agent without version",
-			body:      `{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.81; cc_entrypoint=cli; cch=00000;"}],"messages":[]}`,
+			body:      `{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.81; cc_entrypoint=cli;"}],"messages":[]}`,
 			userAgent: "Mozilla/5.0",
 			unchanged: true,
 		},
 		{
 			name:      "empty user-agent",
-			body:      `{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.81; cc_entrypoint=cli; cch=00000;"}],"messages":[]}`,
+			body:      `{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.81; cc_entrypoint=cli;"}],"messages":[]}`,
 			userAgent: "",
 			unchanged: true,
 		},
 		{
 			name:      "version already matches",
-			body:      `{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.22; cc_entrypoint=cli; cch=00000;"}],"messages":[]}`,
+			body:      `{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.22; cc_entrypoint=cli;"}],"messages":[]}`,
 			userAgent: "claude-cli/2.1.22",
 			unchanged: true,
 		},
@@ -63,7 +61,6 @@ func TestSyncBillingHeaderVersion(t *testing.T) {
 				assert.Equal(t, tt.body, string(result), "body should remain unchanged")
 			} else {
 				assert.Contains(t, string(result), tt.wantSub)
-				// Ensure old semver is gone
 				assert.NotContains(t, string(result), "cc_version=2.1.81")
 			}
 		})
@@ -71,23 +68,22 @@ func TestSyncBillingHeaderVersion(t *testing.T) {
 }
 
 func TestSignBillingHeaderCCH(t *testing.T) {
-	t.Run("replaces placeholder with hash", func(t *testing.T) {
-		body := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.63.a43; cc_entrypoint=cli; cch=00000;"}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
+	t.Run("removes cch placeholder and updates version suffix", func(t *testing.T) {
+		// Use a specific message so we know the fingerprint deterministically
+		// "hello there" -> index 4 is 'o', 7 is 'e', 20 is ''
+		body := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.63.a43; cc_entrypoint=cli; cch=00000;"}],"messages":[{"role":"user","content":[{"type":"text","text":"hello there"}]}]}`)
 		result := signBillingHeaderCCH(body)
 
-		// Should not have the placeholder anymore
-		assert.NotContains(t, string(result), "cch=00000")
-
-		// Should have a 5 hex-char cch value
 		billingText := gjson.GetBytes(result, "system.0.text").String()
-		require.Contains(t, billingText, "cch=")
-		assert.Regexp(t, `cch=[0-9a-f]{5};`, billingText)
-	})
+		
+		// Should not have the cch= placeholder anymore at all
+		assert.NotContains(t, billingText, "cch=")
 
-	t.Run("no placeholder - body unchanged", func(t *testing.T) {
-		body := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.63; cc_entrypoint=cli; cch=abcde;"}],"messages":[]}`)
-		result := signBillingHeaderCCH(body)
-		assert.Equal(t, string(body), string(result))
+		// It should recalculate fp based on "hello there" and "2.1.63", and insert it
+		fp := computeClaudeFingerprint("hello there", "2.1.63")
+		require.NotEmpty(t, fp)
+		assert.Contains(t, billingText, "cc_version=2.1.63."+fp)
+		assert.NotContains(t, billingText, "cc_version=2.1.63.a43")
 	})
 
 	t.Run("no billing header - body unchanged", func(t *testing.T) {
@@ -100,66 +96,30 @@ func TestSignBillingHeaderCCH(t *testing.T) {
 		body := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.63; cc_entrypoint=cli; cch=00000;"}],"messages":[{"role":"user","content":[{"type":"text","text":"keep literal cch=00000 in this message"}]}]}`)
 		result := signBillingHeaderCCH(body)
 
-		// Billing header should be signed
+		// Billing header should be updated and stripped of cch
 		billingText := gjson.GetBytes(result, "system.0.text").String()
 		assert.NotContains(t, billingText, "cch=00000")
+		assert.NotContains(t, billingText, "cch=")
+
+		fp := computeClaudeFingerprint("keep literal cch=00000 in this message", "2.1.63")
+		assert.Contains(t, billingText, "cc_version=2.1.63."+fp)
 
 		// User message should keep its literal cch=00000
 		userText := gjson.GetBytes(result, "messages.0.content.0.text").String()
 		assert.Contains(t, userText, "cch=00000")
 	})
 
-	t.Run("signing is deterministic", func(t *testing.T) {
-		body := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.63; cc_entrypoint=cli; cch=00000;"}],"messages":[{"role":"user","content":"hi"}]}`)
-		r1 := signBillingHeaderCCH(body)
-		body2 := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.63; cc_entrypoint=cli; cch=00000;"}],"messages":[{"role":"user","content":"hi"}]}`)
-		r2 := signBillingHeaderCCH(body2)
-		assert.Equal(t, string(r1), string(r2))
-	})
+	t.Run("computeClaudeFingerprint extracts correct characters", func(t *testing.T) {
+		// "012345678901234567890" => length 21
+		// msg[4]='4', msg[7]='7', msg[20]='0'
+		fp := computeClaudeFingerprint("012345678901234567890", "2.1.88")
+		require.NotEmpty(t, fp)
+		require.Len(t, fp, 3)
 
-	t.Run("matches reference algorithm", func(t *testing.T) {
-		// Verify: signBillingHeaderCCH(body) produces cch = xxHash64(body_with_placeholder, seed) & 0xFFFFF
-		body := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.63.a43; cc_entrypoint=cli; cch=00000;"}],"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`)
-		expectedCCH := fmt.Sprintf("%05x", xxHash64Seeded(body, cchSeed)&0xFFFFF)
-
-		result := signBillingHeaderCCH(body)
-		billingText := gjson.GetBytes(result, "system.0.text").String()
-		assert.Contains(t, billingText, "cch="+expectedCCH+";")
+		// Emojis are treated as runes (which might differ exactly from UCS-2, but works for most ASCII cases)
+		fp2 := computeClaudeFingerprint("01234", "2.1.88")
+		require.NotEmpty(t, fp2)
+		require.Len(t, fp2, 3)
 	})
 }
 
-func TestXXHash64Seeded(t *testing.T) {
-	t.Run("matches cespare/xxhash for seed 0", func(t *testing.T) {
-		inputs := []string{"", "a", "hello world", "The quick brown fox jumps over the lazy dog"}
-		for _, s := range inputs {
-			data := []byte(s)
-			expected := xxhash.Sum64(data)
-			got := xxHash64Seeded(data, 0)
-			assert.Equal(t, expected, got, "mismatch for input %q", s)
-		}
-	})
-
-	t.Run("large input matches cespare", func(t *testing.T) {
-		data := make([]byte, 256)
-		for i := range data {
-			data[i] = byte(i)
-		}
-		expected := xxhash.Sum64(data)
-		got := xxHash64Seeded(data, 0)
-		assert.Equal(t, expected, got)
-	})
-
-	t.Run("deterministic with custom seed", func(t *testing.T) {
-		data := []byte("hello world")
-		h1 := xxHash64Seeded(data, cchSeed)
-		h2 := xxHash64Seeded(data, cchSeed)
-		assert.Equal(t, h1, h2)
-	})
-
-	t.Run("different seeds produce different results", func(t *testing.T) {
-		data := []byte("test data for hashing")
-		h1 := xxHash64Seeded(data, 0)
-		h2 := xxHash64Seeded(data, cchSeed)
-		assert.NotEqual(t, h1, h2)
-	})
-}

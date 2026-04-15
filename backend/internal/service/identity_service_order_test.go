@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 )
@@ -21,7 +22,7 @@ func (s *identityCacheStub) SetFingerprint(_ context.Context, _ int64, _ *Finger
 func (s *identityCacheStub) GetMaskedSessionID(_ context.Context, _ int64) (string, error) {
 	return s.maskedSessionID, nil
 }
-func (s *identityCacheStub) SetMaskedSessionID(_ context.Context, _ int64, sessionID string) error {
+func (s *identityCacheStub) SetMaskedSessionID(_ context.Context, _ int64, sessionID string, _ time.Duration) error {
 	s.maskedSessionID = sessionID
 	return nil
 }

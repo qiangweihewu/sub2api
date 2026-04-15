@@ -428,6 +428,10 @@ type GatewayConfig struct {
 	// UserMessageQueue: 用户消息串行队列配置
 	// 对 role:"user" 的真实用户消息实施账号级串行化 + RPM 自适应延迟
 	UserMessageQueue UserMessageQueueConfig `mapstructure:"user_message_queue"`
+
+	// ResponseCache: 响应级精确匹配缓存配置
+	// 对 temperature=0 的确定性请求缓存完整响应（含 SSE 流），命中时零 API 调用
+	ResponseCache ResponseCacheConfig `mapstructure:"response_cache"`
 }
 
 // UserMessageQueueConfig 用户消息串行队列配置
@@ -473,7 +477,19 @@ func (c *UserMessageQueueConfig) GetEffectiveMode() string {
 }
 
 // GatewayOpenAIWSConfig OpenAI Responses WebSocket 配置。
-// 注意：默认全局开启；如需回滚可使用 force_http 或关闭 enabled。
+
+// ResponseCacheConfig 响应级精确匹配缓存配置。
+// 对 temperature=0 的确定性请求缓存完整 HTTP 响应（含 SSE 流），命中时零 API 调用。
+type ResponseCacheConfig struct {
+	// Enabled: 是否启用响应缓存（默认 false）
+	Enabled bool `mapstructure:"enabled"`
+	// TTLMinutes: 缓存过期时间（分钟），默认 120（2小时）
+	TTLMinutes int `mapstructure:"ttl_minutes"`
+	// MaxSizeMB: 单条响应最大缓存大小（MB），超过不缓存。默认 10
+	MaxSizeMB int `mapstructure:"max_size_mb"`
+}
+
+// GatewayOpenAIWSConfig OpenAI Responses WebSocket 配置。
 type GatewayOpenAIWSConfig struct {
 	// ModeRouterV2Enabled: 新版 WS mode 路由开关（默认 false；关闭时保持 legacy 行为）
 	ModeRouterV2Enabled bool `mapstructure:"mode_router_v2_enabled"`

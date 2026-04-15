@@ -45,6 +45,7 @@ type GatewayHandler struct {
 	apiKeyService             *service.APIKeyService
 	usageRecordWorkerPool     *service.UsageRecordWorkerPool
 	errorPassthroughService   *service.ErrorPassthroughService
+	responseCacheService      *service.ResponseCacheService
 	concurrencyHelper         *ConcurrencyHelper
 	userMsgQueueHelper        *UserMsgQueueHelper
 	maxAccountSwitches        int
@@ -66,6 +67,7 @@ func NewGatewayHandler(
 	usageRecordWorkerPool *service.UsageRecordWorkerPool,
 	errorPassthroughService *service.ErrorPassthroughService,
 	userMsgQueueService *service.UserMessageQueueService,
+	responseCacheService *service.ResponseCacheService,
 	cfg *config.Config,
 	settingService *service.SettingService,
 ) *GatewayHandler {
@@ -98,6 +100,7 @@ func NewGatewayHandler(
 		apiKeyService:             apiKeyService,
 		usageRecordWorkerPool:     usageRecordWorkerPool,
 		errorPassthroughService:   errorPassthroughService,
+		responseCacheService:      responseCacheService,
 		concurrencyHelper:         NewConcurrencyHelper(concurrencyService, SSEPingFormatClaude, pingInterval),
 		userMsgQueueHelper:        umqHelper,
 		maxAccountSwitches:        maxAccountSwitches,
@@ -157,6 +160,24 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 	reqModel := parsedReq.Model
 	reqStream := parsedReq.Stream
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
+
+	// === Response Cache Check ===
+	// For deterministic requests (temperature=0), check if an identical request
+	// was already served and cached. On hit, replay the cached response directly
+	// with zero API cost.
+	var responseCacheKey string
+	if h.responseCacheService != nil && service.IsCacheable(body) {
+		responseCacheKey = service.ComputeCacheKey(apiKey.GroupID, body)
+		if cached, ok := h.responseCacheService.Get(c.Request.Context(), responseCacheKey); ok {
+			if reqStream {
+				service.ReplayCachedSSEResponse(c, cached)
+			} else {
+				service.ReplayCachedJSONResponse(c, cached)
+			}
+			reqLog.Info("gateway.response_cache_hit")
+			return
+		}
+	}
 
 	// 解析渠道级模型映射
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
@@ -679,6 +700,14 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			// 记录 Forward 前已写入字节数，Forward 后若增加则说明 SSE 内容已发，禁止 failover
 			writerSizeBeforeForward := c.Writer.Size()
+
+			// === Response Cache: wrap writer to capture response ===
+			var captureWriter *service.CaptureWriter
+			if responseCacheKey != "" {
+				captureWriter = service.NewCaptureWriter(c.Writer)
+				c.Writer = captureWriter
+			}
+
 			if account.Platform == service.PlatformAntigravity && account.Type != service.AccountTypeAPIKey {
 				result, err = h.antigravityGatewayService.Forward(requestCtx, c, account, body, hasBoundSession)
 			} else {
@@ -691,6 +720,12 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 			}
 			// 清理回调引用，防止 failover 重试时旧回调被错误调用
 			parsedReq.OnUpstreamAccepted = nil
+
+			// Restore original writer if capture writer was installed (error/failover path)
+			if captureWriter != nil {
+				c.Writer = captureWriter.ResponseWriter
+				captureWriter = nil
+			}
 
 			if accountReleaseFunc != nil {
 				accountReleaseFunc()
@@ -833,6 +868,14 @@ func (h *GatewayHandler) Messages(c *gin.Context) {
 					).Error("gateway.record_usage_failed", zap.Error(err))
 				}
 			})
+
+			// === Response Cache: store successful response ===
+			if captureWriter != nil && captureWriter.StatusCode() >= 200 && captureWriter.StatusCode() < 300 && captureWriter.CapturedLen() > 0 {
+				go h.responseCacheService.Set(context.Background(), responseCacheKey, captureWriter.CapturedBytes())
+			}
+			if captureWriter != nil {
+				c.Writer = captureWriter.ResponseWriter
+			}
 			return
 		}
 		if !retryWithFallback {

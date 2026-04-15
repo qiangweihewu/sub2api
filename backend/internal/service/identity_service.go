@@ -26,9 +26,9 @@ var (
 
 // 默认指纹值（当客户端未提供时使用）
 var defaultFingerprint = Fingerprint{
-	UserAgent:               "claude-cli/2.1.22 (external, cli)",
+	UserAgent:               "claude-cli/2.1.107 (external, cli)",
 	StainlessLang:           "js",
-	StainlessPackageVersion: "0.70.0",
+	StainlessPackageVersion: "0.81.0",
 	StainlessOS:             "Linux",
 	StainlessArch:           "arm64",
 	StainlessRuntime:        "node",
@@ -56,9 +56,8 @@ type IdentityCache interface {
 	// 返回的 sessionID 是一个 UUID 格式的字符串
 	// 如果不存在或已过期（15分钟无请求），返回空字符串
 	GetMaskedSessionID(ctx context.Context, accountID int64) (string, error)
-	// SetMaskedSessionID 设置固定的会话ID，TTL 为 15 分钟
-	// 每次调用都会刷新 TTL
-	SetMaskedSessionID(ctx context.Context, accountID int64, sessionID string) error
+	// SetMaskedSessionID 设置固定的会话ID，指定过期时间
+	SetMaskedSessionID(ctx context.Context, accountID int64, sessionID string, ttl time.Duration) error
 }
 
 // IdentityService 管理OAuth账号的请求身份指纹
@@ -261,8 +260,8 @@ func (s *IdentityService) RewriteUserID(body []byte, accountID int64, accountUUI
 }
 
 // RewriteUserIDWithMasking 重写body中的metadata.user_id，支持会话ID伪装
-// 如果账号启用了会话ID伪装（session_id_masking_enabled），
-// 则在完成常规重写后，将 session 部分替换为固定的伪装ID（15分钟内保持不变）
+// 如果账号启用了会话ID伪装（默认启用），
+// 则在完成常规重写后，将 session 部分替换为随机 UUID（30-285 分钟随机 TTL 后自动过期）
 //
 // 重要：此函数使用 json.RawMessage 保留其他字段的原始字节，
 // 避免重新序列化导致 thinking 块等内容被修改。
@@ -311,13 +310,19 @@ func (s *IdentityService) RewriteUserIDWithMasking(ctx context.Context, body []b
 	if maskedSessionID == "" {
 		// 首次或已过期，生成新的伪装 session ID
 		maskedSessionID = generateRandomUUID()
-		logger.LegacyPrintf("service.identity", "Generated new masked session ID for account %d: %s", account.ID, maskedSessionID)
+		
+		// 结合真实客户端模式：不应无限期续订会话，随机生成 30～285 分钟（最高不到 5 小时）生命周期。
+		// 让其自然过期，避免账号变成 7x24 小时不间断通话的僵尸特征。
+		b := make([]byte, 1)
+		_, _ = rand.Read(b)
+		ttl := time.Duration(30+int(b[0])) * time.Minute
+		
+		if err := s.cache.SetMaskedSessionID(ctx, account.ID, maskedSessionID, ttl); err != nil {
+			logger.LegacyPrintf("service.identity", "Warning: failed to set masked session ID for account %d: %v", account.ID, err)
+		}
+		logger.LegacyPrintf("service.identity", "Generated new masked session ID for account %d: %s, TTL: %v", account.ID, maskedSessionID, ttl)
 	}
-
-	// 刷新 TTL（每次请求都刷新，保持 15 分钟有效期）
-	if err := s.cache.SetMaskedSessionID(ctx, account.ID, maskedSessionID); err != nil {
-		logger.LegacyPrintf("service.identity", "Warning: failed to set masked session ID for account %d: %v", account.ID, err)
-	}
+	// 注意：此处不再在每次请求时无脑刷新 TTL，让会话根据生成的 TTL 自然消亡并重新开始。
 
 	// 用 FormatMetadataUserID 重建（保持与 RewriteUserID 相同的格式）
 	version := ExtractCLIVersion(fingerprintUA)

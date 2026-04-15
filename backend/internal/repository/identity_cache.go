@@ -14,7 +14,6 @@ const (
 	fingerprintKeyPrefix   = "fingerprint:"
 	fingerprintTTL         = 7 * 24 * time.Hour // 7天，配合每24小时懒续期可保持活跃账号永不过期
 	maskedSessionKeyPrefix = "masked_session:"
-	maskedSessionTTL       = 15 * time.Minute
 )
 
 // fingerprintKey generates the Redis key for account fingerprint cache.
@@ -69,7 +68,7 @@ func (c *identityCache) GetMaskedSessionID(ctx context.Context, accountID int64)
 	return val, nil
 }
 
-func (c *identityCache) SetMaskedSessionID(ctx context.Context, accountID int64, sessionID string) error {
+func (c *identityCache) SetMaskedSessionID(ctx context.Context, accountID int64, sessionID string, ttl time.Duration) error {
 	key := maskedSessionKey(accountID)
-	return c.rdb.Set(ctx, key, sessionID, maskedSessionTTL).Err()
+	return c.rdb.Set(ctx, key, sessionID, ttl).Err()
 }

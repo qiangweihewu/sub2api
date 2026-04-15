@@ -186,8 +186,8 @@ type Account struct {
 	EnableTLSFingerprint    *bool  `json:"enable_tls_fingerprint,omitempty"`
 	TLSFingerprintProfileID *int64 `json:"tls_fingerprint_profile_id,omitempty"`
 
-	// 会话ID伪装（仅 Anthropic OAuth/SetupToken 账号有效）
-	// 启用后将在15分钟内固定 metadata.user_id 中的 session ID
+	// 会话ID伪装（仅 Anthropic OAuth/SetupToken 账号有效，默认启用）
+	// 启用后将使用随机 UUID 作为 session ID，30-285 分钟随机 TTL 后自动轮换
 	// 从 extra 字段提取，方便前端显示和编辑
 	EnableSessionIDMasking *bool `json:"session_id_masking_enabled,omitempty"`
 

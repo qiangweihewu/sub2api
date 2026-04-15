@@ -3747,11 +3747,13 @@ func rewriteSystemForNonClaudeCode(body []byte, system any) []byte {
 	// 2. 将 system 替换为 Claude Code 标准提示词（array 格式，与真实 Claude Code 一致）
 	//    真实 Claude Code 始终以 [{type: "text", text: "...", cache_control: {type: "ephemeral"}}] 发送 system。
 	//    使用 string 格式会被 Anthropic 检测为第三方应用。
+	//    对于非 CC 客户端（mimic 模式），使用 1h TTL 以获得更高的 prompt cache 命中率。
+	//    （写入成本 2x vs 1.25x，但读取折扣 90% 不变，多轮对话中 ROI 更高）
 	claudeCodeSystemBlock := []map[string]any{
 		{
 			"type":          "text",
 			"text":          claudeCodeSystemPrompt,
-			"cache_control": map[string]string{"type": "ephemeral"},
+			"cache_control": map[string]string{"type": "ephemeral", "ttl": "1h"},
 		},
 	}
 	out, ok := setJSONValueBytes(body, "system", claudeCodeSystemBlock)
@@ -5581,6 +5583,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			}
 		}
 	}
+
+	// 稳定化 tools 数组排序，防止 MCP 工具异步注册导致的顺序抖动破坏 prompt cache prefix
+	body = stabilizeToolOrder(body)
 
 	// 同步 billing header cc_version 与实际发送的 User-Agent 版本
 	if fingerprint != nil {
@@ -8494,6 +8499,9 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 			}
 		}
 	}
+
+	// 稳定化 tools 数组排序，防止 MCP 工具异步注册导致的顺序抖动破坏 prompt cache prefix
+	body = stabilizeToolOrder(body)
 
 	// 同步 billing header cc_version 与实际发送的 User-Agent 版本
 	if ctFingerprint != nil && ctEnableFP {
