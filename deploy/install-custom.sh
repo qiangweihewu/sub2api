@@ -102,6 +102,41 @@ install_docker_compose() {
 }
 
 # =============================================================================
+# Ensure Sufficient Memory (add swap if needed)
+# =============================================================================
+ensure_memory() {
+    local total_mem_kb
+    total_mem_kb=$(grep MemTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+    local total_swap_kb
+    total_swap_kb=$(grep SwapTotal /proc/meminfo 2>/dev/null | awk '{print $2}' || echo "0")
+    local total_available=$(( (total_mem_kb + total_swap_kb) / 1024 ))
+
+    print_info "System memory: $((total_mem_kb / 1024))MB RAM + $((total_swap_kb / 1024))MB swap"
+
+    if [ "$total_available" -lt 3000 ]; then
+        print_warning "Less than 3GB total memory. Docker build needs more."
+        if [ "$total_swap_kb" -lt 2097152 ]; then
+            print_info "Creating 2GB swap file for build..."
+            if [ ! -f /swapfile ]; then
+                dd if=/dev/zero of=/swapfile bs=1M count=2048 status=progress
+                chmod 600 /swapfile
+                mkswap /swapfile
+            fi
+            swapon /swapfile 2>/dev/null || true
+            # Persist across reboots
+            if ! grep -q '/swapfile' /etc/fstab 2>/dev/null; then
+                echo '/swapfile none swap sw 0 0' >> /etc/fstab
+            fi
+            print_success "Swap enabled: $(swapon --show --noheadings | awk '{print $3}')"
+        else
+            print_info "Swap already sufficient"
+        fi
+    else
+        print_success "Memory sufficient for build"
+    fi
+}
+
+# =============================================================================
 # Clone & Build
 # =============================================================================
 clone_repo() {
@@ -280,6 +315,7 @@ do_upgrade() {
     git pull origin main
 
     print_info "Rebuilding Docker image..."
+    ensure_memory
     docker build -t "$IMAGE_NAME:latest" .
 
     cd "$INSTALL_DIR/deploy"
@@ -395,6 +431,7 @@ main() {
     check_os
     install_docker
     install_docker_compose
+    ensure_memory
     clone_repo
     build_image
     configure_env

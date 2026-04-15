@@ -29,6 +29,7 @@ RUN pnpm install --frozen-lockfile
 
 # Copy frontend source and build
 COPY frontend/ ./
+# Increase Node.js heap for vue-tsc on memory-constrained VPS
 ENV NODE_OPTIONS="--max-old-space-size=4096"
 RUN pnpm run build
 
