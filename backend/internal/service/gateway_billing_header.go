@@ -1,11 +1,12 @@
 package service
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"regexp"
 	"strings"
 
-	"github.com/cespare/xxhash/v2"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
 )
@@ -14,11 +15,11 @@ import (
 // the trailing message-derived suffix (e.g. ".c02") if present.
 var ccVersionInBillingRe = regexp.MustCompile(`cc_version=\d+\.\d+\.\d+`)
 
-// cchPlaceholderRe matches the cch=00000 placeholder in billing header text,
-// scoped to x-anthropic-billing-header to avoid touching user content.
-var cchPlaceholderRe = regexp.MustCompile(`(x-anthropic-billing-header:[^"]*?\bcch=)(00000)(;)`)
+var extractCCVersionRe = regexp.MustCompile(`cc_version=(\d+\.\d+\.\d+)`)
+var replaceCchRe = regexp.MustCompile(`\s*cch=[^;\"']+;?`)
+var replaceCcVersionRe = regexp.MustCompile(`cc_version=\d+\.\d+\.\d+(?:\.[a-fA-F0-9]+)?`)
 
-const cchSeed uint64 = 0x6E52736AC806831E
+const claudeFingerprintSalt = "59cf53e54c78"
 
 // syncBillingHeaderVersion rewrites cc_version in x-anthropic-billing-header
 // system text blocks to match the version extracted from userAgent.
@@ -54,20 +55,109 @@ func syncBillingHeaderVersion(body []byte, userAgent string) []byte {
 	return body
 }
 
-// signBillingHeaderCCH computes the xxHash64-based CCH signature for the request
-// body and replaces the cch=00000 placeholder with the computed 5-hex-char hash.
-// The body must contain the placeholder when this function is called.
+// signBillingHeaderCCH computes the true SHA256-based fingerprint for the request
+// and updates the cc_version suffix. It also strips the detectable cch=00000 placeholder.
 func signBillingHeaderCCH(body []byte) []byte {
-	if !cchPlaceholderRe.Match(body) {
+	systemResult := gjson.GetBytes(body, "system")
+	if !systemResult.Exists() || !systemResult.IsArray() {
 		return body
 	}
-	cch := fmt.Sprintf("%05x", xxHash64Seeded(body, cchSeed)&0xFFFFF)
-	return cchPlaceholderRe.ReplaceAll(body, []byte("${1}"+cch+"${3}"))
+
+	var versionStr string
+	hasBilling := false
+	systemResult.ForEach(func(_, item gjson.Result) bool {
+		text := item.Get("text")
+		if text.Exists() && text.Type == gjson.String &&
+			strings.HasPrefix(text.String(), "x-anthropic-billing-header") {
+			hasBilling = true
+			matches := extractCCVersionRe.FindStringSubmatch(text.String())
+			if len(matches) == 2 {
+				versionStr = matches[1]
+			}
+		}
+		return !hasBilling // break if found
+	})
+
+	if !hasBilling {
+		return body
+	}
+
+	msgText := extractFirstUserMessageTextForFingerprint(body)
+	fp := computeClaudeFingerprint(msgText, versionStr)
+
+	idx := 0
+	systemResult.ForEach(func(_, item gjson.Result) bool {
+		text := item.Get("text")
+		if text.Exists() && text.Type == gjson.String &&
+			strings.HasPrefix(text.String(), "x-anthropic-billing-header") {
+			
+			newText := text.String()
+			
+			// 1. Remove cch=... placeholder since true Claude Code does not use it
+			newText = replaceCchRe.ReplaceAllString(newText, "")
+			
+			// 2. Rewrite cc_version to include the true SHA256 fingerprint suffix
+			if versionStr != "" && fp != "" {
+				replacement := "cc_version=" + versionStr + "." + fp
+				newText = replaceCcVersionRe.ReplaceAllString(newText, replacement)
+			}
+			
+			if newText != text.String() {
+				if updated, err := sjson.SetBytes(body, fmt.Sprintf("system.%d.text", idx), newText); err == nil {
+					body = updated
+				}
+			}
+		}
+		idx++
+		return true
+	})
+	return body
 }
 
-// xxHash64Seeded computes xxHash64 of data with a custom seed.
-func xxHash64Seeded(data []byte, seed uint64) uint64 {
-	d := xxhash.NewWithSeed(seed)
-	_, _ = d.Write(data)
-	return d.Sum64()
+func extractFirstUserMessageTextForFingerprint(body []byte) string {
+	var text string
+	messages := gjson.GetBytes(body, "messages")
+	if messages.IsArray() {
+		messages.ForEach(func(_, msg gjson.Result) bool {
+			if msg.Get("role").String() == "user" {
+				content := msg.Get("content")
+				if content.Type == gjson.String {
+					text = content.String()
+				} else if content.IsArray() {
+					content.ForEach(func(_, block gjson.Result) bool {
+						if block.Get("type").String() == "text" {
+							text = block.Get("text").String()
+							return false
+						}
+						return true
+					})
+				}
+				return false // Break after first user message
+			}
+			return true
+		})
+	}
+	return text
+}
+
+func computeClaudeFingerprint(message, version string) string {
+	var p4, p7, p20 string
+	rn := []rune(message)
+	if len(rn) > 4 {
+		p4 = string(rn[4])
+	}
+	if len(rn) > 7 {
+		p7 = string(rn[7])
+	}
+	if len(rn) > 20 {
+		p20 = string(rn[20])
+	}
+	
+	h := sha256.New()
+	h.Write([]byte(claudeFingerprintSalt + p4 + p7 + p20 + version))
+	hashHex := hex.EncodeToString(h.Sum(nil))
+	if len(hashHex) >= 3 {
+		return hashHex[:3]
+	}
+	return ""
 }

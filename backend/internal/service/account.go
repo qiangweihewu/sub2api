@@ -1300,21 +1300,22 @@ func (a *Account) GetUserMsgQueueMode() string {
 
 // IsSessionIDMaskingEnabled 检查是否启用会话ID伪装
 // 仅适用于 Anthropic OAuth/SetupToken 类型账号
-// 启用后将在一段时间内（15分钟）固定 metadata.user_id 中的 session ID，
-// 使上游认为请求来自同一个会话
+// 启用后将使用随机 UUID 替换 metadata.user_id 中的 session ID，
+// 并在 30-285 分钟的随机 TTL 后自动过期并重新生成，模拟真实用户的会话生命周期。
+// 默认启用（防封号最佳实践），可通过设置 session_id_masking_enabled=false 显式关闭。
 func (a *Account) IsSessionIDMaskingEnabled() bool {
 	if !a.IsAnthropicOAuthOrSetupToken() {
 		return false
 	}
 	if a.Extra == nil {
-		return false
+		return true
 	}
 	if v, ok := a.Extra["session_id_masking_enabled"]; ok {
 		if enabled, ok := v.(bool); ok {
 			return enabled
 		}
 	}
-	return false
+	return true
 }
 
 // IsCustomBaseURLEnabled 检查是否启用自定义 base URL 中继转发

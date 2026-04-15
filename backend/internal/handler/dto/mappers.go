@@ -257,10 +257,10 @@ func AccountFromServiceShallow(a *service.Account) *Account {
 		if profileID := a.GetTLSFingerprintProfileID(); profileID > 0 {
 			out.TLSFingerprintProfileID = &profileID
 		}
-		// 会话ID伪装开关
-		if a.IsSessionIDMaskingEnabled() {
-			enabled := true
-			out.EnableSessionIDMasking = &enabled
+		// 会话ID伪装开关（默认启用，始终输出实际状态）
+		{
+			v := a.IsSessionIDMaskingEnabled()
+			out.EnableSessionIDMasking = &v
 		}
 		// 缓存 TTL 强制替换
 		if a.IsCacheTTLOverrideEnabled() {
