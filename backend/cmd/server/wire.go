@@ -13,6 +13,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/ent"
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/handler"
+	"github.com/Wei-Shaw/sub2api/internal/handler/admin"
 	"github.com/Wei-Shaw/sub2api/internal/payment"
 	"github.com/Wei-Shaw/sub2api/internal/repository"
 	"github.com/Wei-Shaw/sub2api/internal/server"
@@ -42,6 +43,11 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 
 		// Server layer ProviderSet
 		server.ProviderSet,
+
+		// Interface bindings that span repository <-> handler layers.
+		// DashboardStatsHandler depends on admin.StatsRepo, which the
+		// concrete *repository.DashboardStatsRepo satisfies.
+		wire.Bind(new(admin.StatsRepo), new(*repository.DashboardStatsRepo)),
 
 		// Privacy client factory for OpenAI training opt-out
 		providePrivacyClientFactory,

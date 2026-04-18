@@ -372,6 +372,26 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/accounts/:id/dashboard',
+    name: 'admin-account-dashboard',
+    component: () => import('@/views/admin/AccountDashboardView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Account Dashboard'
+    }
+  },
+  {
+    path: '/admin/groups/:id/dashboard',
+    name: 'admin-group-dashboard',
+    component: () => import('@/views/admin/GroupDashboardView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Group Dashboard'
+    }
+  },
+  {
     path: '/admin/announcements',
     name: 'AdminAnnouncements',
     component: () => import('@/views/admin/AnnouncementsView.vue'),

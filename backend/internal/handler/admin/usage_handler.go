@@ -2,6 +2,8 @@ package admin
 
 import (
 	"context"
+	"encoding/csv"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -18,6 +20,15 @@ import (
 
 	"github.com/gin-gonic/gin"
 )
+
+// adminUsageCSVMaxRows caps the max rows returned by the CSV export to avoid
+// accidentally streaming huge result sets. Operators must narrow the time range
+// when they hit this ceiling.
+const adminUsageCSVMaxRows int64 = 50000
+
+// adminUsageCSVPageSize is the chunk size used when paging through ListWithFilters
+// during CSV export. Matches the repo's internal hard cap of 1000.
+const adminUsageCSVPageSize = 1000
 
 // UsageHandler handles admin usage-related requests
 type UsageHandler struct {
@@ -332,6 +343,232 @@ func (h *UsageHandler) Stats(c *gin.Context) {
 	}
 
 	response.Success(c, stats)
+}
+
+// ExportCSV streams admin usage logs as text/csv with the same filters as List.
+// GET /api/v1/admin/usage.csv
+func (h *UsageHandler) ExportCSV(c *gin.Context) {
+	// Parse the same filters as List. Keep duplication local so we don't perturb
+	// the shape of List.
+	var userID, apiKeyID, accountID, groupID int64
+	if userIDStr := c.Query("user_id"); userIDStr != "" {
+		id, err := strconv.ParseInt(userIDStr, 10, 64)
+		if err != nil {
+			response.BadRequest(c, "Invalid user_id")
+			return
+		}
+		userID = id
+	}
+
+	if apiKeyIDStr := c.Query("api_key_id"); apiKeyIDStr != "" {
+		id, err := strconv.ParseInt(apiKeyIDStr, 10, 64)
+		if err != nil {
+			response.BadRequest(c, "Invalid api_key_id")
+			return
+		}
+		apiKeyID = id
+	}
+
+	if accountIDStr := c.Query("account_id"); accountIDStr != "" {
+		id, err := strconv.ParseInt(accountIDStr, 10, 64)
+		if err != nil {
+			response.BadRequest(c, "Invalid account_id")
+			return
+		}
+		accountID = id
+	}
+
+	if groupIDStr := c.Query("group_id"); groupIDStr != "" {
+		id, err := strconv.ParseInt(groupIDStr, 10, 64)
+		if err != nil {
+			response.BadRequest(c, "Invalid group_id")
+			return
+		}
+		groupID = id
+	}
+
+	model := c.Query("model")
+	billingMode := strings.TrimSpace(c.Query("billing_mode"))
+
+	var requestType *int16
+	var stream *bool
+	if requestTypeStr := strings.TrimSpace(c.Query("request_type")); requestTypeStr != "" {
+		parsed, err := service.ParseUsageRequestType(requestTypeStr)
+		if err != nil {
+			response.BadRequest(c, err.Error())
+			return
+		}
+		value := int16(parsed)
+		requestType = &value
+	} else if streamStr := c.Query("stream"); streamStr != "" {
+		val, err := strconv.ParseBool(streamStr)
+		if err != nil {
+			response.BadRequest(c, "Invalid stream value, use true or false")
+			return
+		}
+		stream = &val
+	}
+
+	var billingType *int8
+	if billingTypeStr := c.Query("billing_type"); billingTypeStr != "" {
+		val, err := strconv.ParseInt(billingTypeStr, 10, 8)
+		if err != nil {
+			response.BadRequest(c, "Invalid billing_type")
+			return
+		}
+		bt := int8(val)
+		billingType = &bt
+	}
+
+	// Parse date range (YYYY-MM-DD in user's timezone, half-open range).
+	var startTime, endTime *time.Time
+	userTZ := c.Query("timezone")
+	if startDateStr := c.Query("start_date"); startDateStr != "" {
+		t, err := timezone.ParseInUserLocation("2006-01-02", startDateStr, userTZ)
+		if err != nil {
+			response.BadRequest(c, "Invalid start_date format, use YYYY-MM-DD")
+			return
+		}
+		startTime = &t
+	}
+	if endDateStr := c.Query("end_date"); endDateStr != "" {
+		t, err := timezone.ParseInUserLocation("2006-01-02", endDateStr, userTZ)
+		if err != nil {
+			response.BadRequest(c, "Invalid end_date format, use YYYY-MM-DD")
+			return
+		}
+		t = t.AddDate(0, 0, 1)
+		endTime = &t
+	}
+
+	filters := usagestats.UsageLogFilters{
+		UserID:      userID,
+		APIKeyID:    apiKeyID,
+		AccountID:   accountID,
+		GroupID:     groupID,
+		Model:       model,
+		RequestType: requestType,
+		Stream:      stream,
+		BillingType: billingType,
+		BillingMode: billingMode,
+		StartTime:   startTime,
+		EndTime:     endTime,
+	}
+
+	// Cap the export size by looking up the count first. GetStatsWithFilters
+	// runs a single aggregate query against the same filter set, so it's the
+	// cheapest way to enforce the row ceiling.
+	stats, err := h.usageService.GetStatsWithFilters(c.Request.Context(), filters)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if stats != nil && stats.TotalRequests > adminUsageCSVMaxRows {
+		response.BadRequest(c, "too many rows, narrow the time range")
+		return
+	}
+
+	// Headers must be written before the body starts streaming.
+	filename := fmt.Sprintf("usage-%s.csv", time.Now().UTC().Format("20060102-150405"))
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+	c.Header("Cache-Control", "no-store")
+	c.Status(http.StatusOK)
+
+	writer := csv.NewWriter(c.Writer)
+	defer writer.Flush()
+
+	header := []string{
+		"created_at",
+		"account_id",
+		"api_key_id",
+		"user_id",
+		"ip_address",
+		"model",
+		"input_tokens",
+		"output_tokens",
+		"cache_creation_tokens",
+		"cache_read_tokens",
+		"total_cost_usd",
+		"duration_ms",
+		"stream",
+		"request_id",
+	}
+	if err := writer.Write(header); err != nil {
+		logger.LegacyPrintf("handler.admin.usage", "[ExportCSV] 写入表头失败: err=%v", err)
+		return
+	}
+	writer.Flush()
+
+	// Page through results in 1000-row chunks so we never buffer the full
+	// result set in memory. Stop either when the repo runs out of rows or when
+	// we hit the 50k ceiling.
+	var written int64
+	page := 1
+	for {
+		params := pagination.PaginationParams{
+			Page:      page,
+			PageSize:  adminUsageCSVPageSize,
+			SortBy:    "created_at",
+			SortOrder: pagination.SortOrderDesc,
+		}
+		records, _, err := h.usageService.ListWithFilters(c.Request.Context(), params, filters)
+		if err != nil {
+			logger.LegacyPrintf("handler.admin.usage", "[ExportCSV] 查询分页失败: page=%d err=%v", page, err)
+			return
+		}
+		if len(records) == 0 {
+			break
+		}
+		for i := range records {
+			if written >= adminUsageCSVMaxRows {
+				break
+			}
+			r := &records[i]
+			ip := ""
+			if r.IPAddress != nil {
+				ip = *r.IPAddress
+			}
+			duration := ""
+			if r.DurationMs != nil {
+				duration = strconv.Itoa(*r.DurationMs)
+			}
+			row := []string{
+				r.CreatedAt.UTC().Format(time.RFC3339Nano),
+				strconv.FormatInt(r.AccountID, 10),
+				strconv.FormatInt(r.APIKeyID, 10),
+				strconv.FormatInt(r.UserID, 10),
+				ip,
+				r.Model,
+				strconv.Itoa(r.InputTokens),
+				strconv.Itoa(r.OutputTokens),
+				strconv.Itoa(r.CacheCreationTokens),
+				strconv.Itoa(r.CacheReadTokens),
+				strconv.FormatFloat(r.TotalCost, 'f', -1, 64),
+				duration,
+				strconv.FormatBool(r.Stream),
+				r.RequestID,
+			}
+			if err := writer.Write(row); err != nil {
+				logger.LegacyPrintf("handler.admin.usage", "[ExportCSV] 写入数据行失败: page=%d err=%v", page, err)
+				return
+			}
+			written++
+		}
+		// Flush each chunk so bytes reach the client while we keep reading.
+		writer.Flush()
+		if err := writer.Error(); err != nil {
+			logger.LegacyPrintf("handler.admin.usage", "[ExportCSV] CSV 写入错误: err=%v", err)
+			return
+		}
+		if flusher, ok := c.Writer.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		if written >= adminUsageCSVMaxRows || len(records) < adminUsageCSVPageSize {
+			break
+		}
+		page++
+	}
 }
 
 // SearchUsers handles searching users by email keyword
