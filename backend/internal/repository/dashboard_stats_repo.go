@@ -289,3 +289,76 @@ func (r *DashboardStatsRepo) IPBreakdown(ctx context.Context, f StatsFilter, lim
 
 	return rows, nil
 }
+
+// UserBreakdownRow is one row of per-(api_key, user) aggregates produced by
+// UserBreakdown.
+type UserBreakdownRow struct {
+	APIKeyID     int64     `json:"api_key_id"`
+	UserID       int64     `json:"user_id"`
+	RequestCount int64     `json:"request_count"`
+	InputTokens  int64     `json:"input_tokens"`
+	OutputTokens int64     `json:"output_tokens"`
+	TotalCostUSD float64   `json:"total_cost_usd"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+}
+
+// UserBreakdown returns per-(api_key, user) aggregates for the given scope +
+// time window, sorted by RequestCount descending and trimmed to limit. If
+// limit <= 0 or > 500 it is reset to 100.
+//
+// Implementation note: consolidates all per-(api_key_id, user_id) aggregates
+// (count, token sums, cost, max created_at) into a single GROUP BY scan using
+// explicit Ent As(...) aliases that line up with the JSON tags on the scan
+// target. Total round-trips: 1, regardless of N.
+func (r *DashboardStatsRepo) UserBreakdown(ctx context.Context, f StatsFilter, limit int) ([]UserBreakdownRow, error) {
+	if err := f.Validate(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+
+	type userAgg struct {
+		APIKeyID     int64     `json:"api_key_id"`
+		UserID       int64     `json:"user_id"`
+		RequestCount int64     `json:"request_count"`
+		InputTokens  int64     `json:"input_tokens"`
+		OutputTokens int64     `json:"output_tokens"`
+		TotalCostUSD float64   `json:"total_cost_usd"`
+		LastSeenAt   time.Time `json:"last_seen_at"`
+	}
+	var aggs []userAgg
+	if err := r.baseQuery(f).
+		GroupBy(dbusagelog.FieldAPIKeyID, dbusagelog.FieldUserID).
+		Aggregate(
+			dbent.As(dbent.Count(), "request_count"),
+			dbent.As(dbent.Sum(dbusagelog.FieldInputTokens), "input_tokens"),
+			dbent.As(dbent.Sum(dbusagelog.FieldOutputTokens), "output_tokens"),
+			dbent.As(dbent.Sum(dbusagelog.FieldTotalCost), "total_cost_usd"),
+			dbent.As(dbent.Max(dbusagelog.FieldCreatedAt), "last_seen_at"),
+		).Scan(ctx, &aggs); err != nil {
+		return nil, fmt.Errorf("dashboard stats: user aggregate scan: %w", err)
+	}
+
+	rows := make([]UserBreakdownRow, 0, len(aggs))
+	for _, a := range aggs {
+		rows = append(rows, UserBreakdownRow{
+			APIKeyID:     a.APIKeyID,
+			UserID:       a.UserID,
+			RequestCount: a.RequestCount,
+			InputTokens:  a.InputTokens,
+			OutputTokens: a.OutputTokens,
+			TotalCostUSD: a.TotalCostUSD,
+			LastSeenAt:   a.LastSeenAt,
+		})
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].RequestCount > rows[j].RequestCount
+	})
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+
+	return rows, nil
+}
