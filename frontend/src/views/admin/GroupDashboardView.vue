@@ -24,6 +24,7 @@
               {{ preset.label }}
             </button>
           </div>
+          <ExportButton scope="group" :id="groupId" :from="from" :to="to" />
         </div>
       </div>
 
@@ -54,6 +55,7 @@ import AccountBreakdownTable from '@/components/admin/dashboard/AccountBreakdown
 import IPBreakdownTable from '@/components/admin/dashboard/IPBreakdownTable.vue'
 import UserBreakdownTable from '@/components/admin/dashboard/UserBreakdownTable.vue'
 import RecentRequestsTable from '@/components/admin/dashboard/RecentRequestsTable.vue'
+import ExportButton from '@/components/admin/dashboard/ExportButton.vue'
 
 type PresetKey = '24h' | '7d' | '30d'
 
