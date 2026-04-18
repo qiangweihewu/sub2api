@@ -92,81 +92,72 @@ func (r *DashboardStatsRepo) baseQuery(f StatsFilter) *dbent.UsageLogQuery {
 // Overview returns aggregated Overview metrics for the filter's scope and
 // time window.
 //
-// Implementation note: we run the aggregates as separate queries instead of a
-// single Aggregate(...).Scan(...) call to avoid Ent struct-tag/alias
-// mismatches between dialects. Dashboard windows are bounded, so the extra
-// round-trips are acceptable.
+// Implementation note: consolidated to 2 round-trips.
+//   - Query 1: single Aggregate(...).Scan(...) producing the 4 numeric metrics
+//     plus the row count, using As(...) aliases matched to JSON tags on the
+//     scan target (same pattern the Breakdown methods use). For non-grouped
+//     aggregates Ent returns a single row; we scan into a []struct of length 1
+//     to stay robust across dialects.
+//   - Query 2: single GROUP BY (ip_address, api_key_id) scan; distinct IPs
+//     and distinct api_key_ids are counted in Go memory.
 func (r *DashboardStatsRepo) Overview(ctx context.Context, f StatsFilter) (*Overview, error) {
 	if err := f.Validate(); err != nil {
 		return nil, err
 	}
 
-	// 1) Request count.
-	count, err := r.baseQuery(f).Count(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("dashboard stats: count: %w", err)
+	// Query 1: numeric metrics + row count in one aggregate scan.
+	type overviewAgg struct {
+		RequestCount int64   `json:"request_count"`
+		InputTokens  int64   `json:"input_tokens"`
+		OutputTokens int64   `json:"output_tokens"`
+		TotalCostUSD float64 `json:"total_cost_usd"`
+	}
+	var aggs []overviewAgg
+	if err := r.baseQuery(f).
+		Aggregate(
+			dbent.As(dbent.Count(), "request_count"),
+			dbent.As(dbent.Sum(dbusagelog.FieldInputTokens), "input_tokens"),
+			dbent.As(dbent.Sum(dbusagelog.FieldOutputTokens), "output_tokens"),
+			dbent.As(dbent.Sum(dbusagelog.FieldTotalCost), "total_cost_usd"),
+		).Scan(ctx, &aggs); err != nil {
+		return nil, fmt.Errorf("dashboard stats: overview aggregate scan: %w", err)
 	}
 
-	// 2) Sum(input_tokens).
-	var sumInput []struct {
-		Sum int64 `json:"sum"`
+	ov := &Overview{}
+	if len(aggs) > 0 {
+		ov.RequestCount = aggs[0].RequestCount
+		ov.InputTokens = aggs[0].InputTokens
+		ov.OutputTokens = aggs[0].OutputTokens
+		ov.TotalCostUSD = aggs[0].TotalCostUSD
+	}
+
+	// Empty window short-circuit: skip the pairs query when there are no rows.
+	if ov.RequestCount == 0 {
+		return ov, nil
+	}
+
+	// Query 2: distinct (ip_address, api_key_id) pairs in scope. Unique IPs
+	// and unique api_key_ids are derived in Go memory. Empty IP addresses are
+	// excluded so they don't inflate UniqueIPs.
+	var pairs []struct {
+		IPAddress string `json:"ip_address"`
+		APIKeyID  int64  `json:"api_key_id"`
 	}
 	if err := r.baseQuery(f).
-		Aggregate(dbent.As(dbent.Sum(dbusagelog.FieldInputTokens), "sum")).
-		Scan(ctx, &sumInput); err != nil {
-		return nil, fmt.Errorf("dashboard stats: sum input_tokens: %w", err)
+		Where(dbusagelog.IPAddressNEQ("")).
+		GroupBy(dbusagelog.FieldIPAddress, dbusagelog.FieldAPIKeyID).
+		Scan(ctx, &pairs); err != nil {
+		return nil, fmt.Errorf("dashboard stats: overview pairs: %w", err)
 	}
 
-	// 3) Sum(output_tokens).
-	var sumOutput []struct {
-		Sum int64 `json:"sum"`
+	ipSet := make(map[string]struct{}, len(pairs))
+	keySet := make(map[int64]struct{}, len(pairs))
+	for _, p := range pairs {
+		ipSet[p.IPAddress] = struct{}{}
+		keySet[p.APIKeyID] = struct{}{}
 	}
-	if err := r.baseQuery(f).
-		Aggregate(dbent.As(dbent.Sum(dbusagelog.FieldOutputTokens), "sum")).
-		Scan(ctx, &sumOutput); err != nil {
-		return nil, fmt.Errorf("dashboard stats: sum output_tokens: %w", err)
-	}
-
-	// 4) Sum(total_cost).
-	var sumCost []struct {
-		Sum float64 `json:"sum"`
-	}
-	if err := r.baseQuery(f).
-		Aggregate(dbent.As(dbent.Sum(dbusagelog.FieldTotalCost), "sum")).
-		Scan(ctx, &sumCost); err != nil {
-		return nil, fmt.Errorf("dashboard stats: sum total_cost: %w", err)
-	}
-
-	// 5) Distinct IP addresses (len of GroupBy result).
-	ips, err := r.baseQuery(f).
-		GroupBy(dbusagelog.FieldIPAddress).
-		Strings(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("dashboard stats: distinct ip_address: %w", err)
-	}
-
-	// 6) Distinct api_key_id values (len of GroupBy result).
-	apiKeyIDs, err := r.baseQuery(f).
-		GroupBy(dbusagelog.FieldAPIKeyID).
-		Ints(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("dashboard stats: distinct api_key_id: %w", err)
-	}
-
-	ov := &Overview{
-		RequestCount: int64(count),
-		UniqueIPs:    len(ips),
-		UniqueUsers:  len(apiKeyIDs),
-	}
-	if len(sumInput) > 0 {
-		ov.InputTokens = sumInput[0].Sum
-	}
-	if len(sumOutput) > 0 {
-		ov.OutputTokens = sumOutput[0].Sum
-	}
-	if len(sumCost) > 0 {
-		ov.TotalCostUSD = sumCost[0].Sum
-	}
+	ov.UniqueIPs = len(ipSet)
+	ov.UniqueUsers = len(keySet)
 	return ov, nil
 }
 
