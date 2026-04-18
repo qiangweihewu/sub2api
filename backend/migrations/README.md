@@ -6,11 +6,30 @@ This directory contains SQL migration files for database schema changes. The mig
 
 ## Migration File Naming
 
+### Upstream / mainline migrations
+
 Format: `NNN_description.sql`
 - `NNN`: Sequential number (e.g., 001, 002, 003)
 - `description`: Brief description in snake_case
 
 Example: `017_add_gemini_tier_id.sql`
+
+### Fork-specific migrations (时间戳前缀)
+
+如果你的改动是 fork 专属、不准备回推上游，**请使用时间戳前缀**，避免与上游新增的顺序编号撞车：
+
+Format: `YYYYMMDDHHMM_description.sql`
+
+Example: `202604180659_add_usage_logs_account_id_created_at_index_notx.sql`
+
+说明：
+- 本项目 migration runner 使用 `sort.Strings` 按字符串排序。时间戳前缀的首字符是 `2`，而顺序编号前缀首字符是 `0`/`1`，所以 **时间戳迁移永远排在上游数字迁移之后**，混排不会破坏执行顺序。
+- 只要同一分钟内不双开提交，fork 的时间戳迁移永远不会与上游（或其他 fork）的顺序编号迁移冲突。
+- 回推上游时，把时间戳前缀改回顺序编号（使用当时 upstream 最高编号 +1）。
+
+什么时候仍然用 `NNN_` 顺序编号：
+- 准备 PR 回推 upstream 的改动
+- 直接在 upstream 仓库开发
 
 ### `_notx.sql` 命名与执行语义（并发索引专用）
 
