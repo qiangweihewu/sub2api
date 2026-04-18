@@ -193,6 +193,54 @@ export async function groupAccounts(
   return data
 }
 
+/**
+ * Parameters for `downloadUsageCSV`. Scope selects which `*_id` filter the
+ * backend should key on.
+ */
+export interface UsageCSVQuery {
+  scope: 'account' | 'group'
+  id: number
+  /** Local date in YYYY-MM-DD, inclusive start. */
+  start_date: string
+  /** Local date in YYYY-MM-DD, inclusive end. */
+  end_date: string
+}
+
+/**
+ * Fetch the admin usage CSV export as a Blob using the authenticated
+ * axios client. Returns the Blob plus a suggested filename derived from
+ * the Content-Disposition header (falls back to a timestamped default).
+ *
+ * The response interceptor only unwraps the `{code,message,data}` envelope
+ * when the body is a plain object with a `code` key; a Blob falls through
+ * untouched, so we don't need a "skip interceptor" escape hatch here.
+ */
+export async function downloadUsageCSV(q: UsageCSVQuery): Promise<{ blob: Blob; filename: string }> {
+  const params: Record<string, string | number> = {
+    start_date: q.start_date,
+    end_date: q.end_date
+  }
+  if (q.scope === 'account') {
+    params.account_id = q.id
+  } else {
+    params.group_id = q.id
+  }
+
+  const response = await apiClient.get<Blob>('/admin/usage.csv', {
+    params,
+    responseType: 'blob'
+  })
+
+  // axios lowercases response headers; content-disposition looks like
+  //   attachment; filename="usage-20260417-120000.csv"
+  const disposition = (response.headers?.['content-disposition'] as string | undefined) ?? ''
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(disposition)
+  const fallback = `usage-${new Date().toISOString().slice(0, 10)}.csv`
+  const filename = match ? decodeURIComponent(match[1]) : fallback
+
+  return { blob: response.data as unknown as Blob, filename }
+}
+
 export const dashboardStatsApi = {
   accountOverview,
   accountIPs,
@@ -200,7 +248,8 @@ export const dashboardStatsApi = {
   groupOverview,
   groupIPs,
   groupUsers,
-  groupAccounts
+  groupAccounts,
+  downloadUsageCSV
 }
 
 export default dashboardStatsApi
