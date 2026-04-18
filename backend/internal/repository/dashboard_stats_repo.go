@@ -362,3 +362,73 @@ func (r *DashboardStatsRepo) UserBreakdown(ctx context.Context, f StatsFilter, l
 
 	return rows, nil
 }
+
+// AccountBreakdownRow is one row of per-account aggregates produced by
+// AccountBreakdown.
+type AccountBreakdownRow struct {
+	AccountID    int64     `json:"account_id"`
+	RequestCount int64     `json:"request_count"`
+	InputTokens  int64     `json:"input_tokens"`
+	OutputTokens int64     `json:"output_tokens"`
+	TotalCostUSD float64   `json:"total_cost_usd"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+}
+
+// AccountBreakdown splits a group's consumption across its accounts over the
+// window. Sorted by RequestCount desc (no limit — number of accounts per group
+// is expected to be small, typically 1–10).
+//
+// This is group-only and intentionally does not take a StatsFilter because the
+// account_id dimension must be unconstrained. Total round-trips: 1.
+func (r *DashboardStatsRepo) AccountBreakdown(ctx context.Context, groupID int64, from, to time.Time) ([]AccountBreakdownRow, error) {
+	if groupID <= 0 {
+		return nil, errors.New("dashboard stats: AccountBreakdown requires groupID > 0")
+	}
+	if to.Before(from) {
+		return nil, errors.New("dashboard stats: AccountBreakdown to must be >= from")
+	}
+
+	type accountAgg struct {
+		AccountID    int64     `json:"account_id"`
+		RequestCount int64     `json:"request_count"`
+		InputTokens  int64     `json:"input_tokens"`
+		OutputTokens int64     `json:"output_tokens"`
+		TotalCostUSD float64   `json:"total_cost_usd"`
+		LastSeenAt   time.Time `json:"last_seen_at"`
+	}
+	var aggs []accountAgg
+	if err := r.client.UsageLog.Query().
+		Where(
+			dbusagelog.GroupIDEQ(groupID),
+			dbusagelog.CreatedAtGTE(from),
+			dbusagelog.CreatedAtLTE(to),
+		).
+		GroupBy(dbusagelog.FieldAccountID).
+		Aggregate(
+			dbent.As(dbent.Count(), "request_count"),
+			dbent.As(dbent.Sum(dbusagelog.FieldInputTokens), "input_tokens"),
+			dbent.As(dbent.Sum(dbusagelog.FieldOutputTokens), "output_tokens"),
+			dbent.As(dbent.Sum(dbusagelog.FieldTotalCost), "total_cost_usd"),
+			dbent.As(dbent.Max(dbusagelog.FieldCreatedAt), "last_seen_at"),
+		).Scan(ctx, &aggs); err != nil {
+		return nil, fmt.Errorf("dashboard stats: account aggregate scan: %w", err)
+	}
+
+	rows := make([]AccountBreakdownRow, 0, len(aggs))
+	for _, a := range aggs {
+		rows = append(rows, AccountBreakdownRow{
+			AccountID:    a.AccountID,
+			RequestCount: a.RequestCount,
+			InputTokens:  a.InputTokens,
+			OutputTokens: a.OutputTokens,
+			TotalCostUSD: a.TotalCostUSD,
+			LastSeenAt:   a.LastSeenAt,
+		})
+	}
+
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].RequestCount > rows[j].RequestCount
+	})
+
+	return rows, nil
+}
