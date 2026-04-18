@@ -38,6 +38,9 @@
 
       <!-- User Breakdown -->
       <UserBreakdownTable scope="group" :id="groupId" :from="from" :to="to" />
+
+      <!-- Recent Requests -->
+      <RecentRequestsTable scope="group" :id="groupId" :from="from" :to="to" />
     </div>
   </AppLayout>
 </template>
@@ -50,6 +53,7 @@ import StatsOverview from '@/components/admin/dashboard/StatsOverview.vue'
 import AccountBreakdownTable from '@/components/admin/dashboard/AccountBreakdownTable.vue'
 import IPBreakdownTable from '@/components/admin/dashboard/IPBreakdownTable.vue'
 import UserBreakdownTable from '@/components/admin/dashboard/UserBreakdownTable.vue'
+import RecentRequestsTable from '@/components/admin/dashboard/RecentRequestsTable.vue'
 
 type PresetKey = '24h' | '7d' | '30d'
 

@@ -33,6 +33,9 @@
 
       <!-- User Breakdown -->
       <UserBreakdownTable scope="account" :id="accountId" :from="from" :to="to" />
+
+      <!-- Recent Requests -->
+      <RecentRequestsTable scope="account" :id="accountId" :from="from" :to="to" />
     </div>
   </AppLayout>
 </template>
@@ -44,6 +47,7 @@ import AppLayout from '@/components/layout/AppLayout.vue'
 import StatsOverview from '@/components/admin/dashboard/StatsOverview.vue'
 import IPBreakdownTable from '@/components/admin/dashboard/IPBreakdownTable.vue'
 import UserBreakdownTable from '@/components/admin/dashboard/UserBreakdownTable.vue'
+import RecentRequestsTable from '@/components/admin/dashboard/RecentRequestsTable.vue'
 
 type PresetKey = '24h' | '7d' | '30d'
 
