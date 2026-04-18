@@ -1056,6 +1056,11 @@ var (
 				Columns: []*schema.Column{UsageLogsColumns[33], UsageLogsColumns[32]},
 			},
 			{
+				Name:    "usagelog_account_id_created_at",
+				Unique:  false,
+				Columns: []*schema.Column{UsageLogsColumns[34], UsageLogsColumns[32]},
+			},
+			{
 				Name:    "usagelog_group_id_created_at",
 				Unique:  false,
 				Columns: []*schema.Column{UsageLogsColumns[35], UsageLogsColumns[32]},
