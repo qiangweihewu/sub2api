@@ -88,6 +88,9 @@ func RegisterAdminRoutes(
 
 		// 渠道管理
 		registerChannelRoutes(admin, h)
+
+		// 账号/分组仪表盘统计（Overview / IP / User / Account breakdowns）
+		registerDashboardStatsRoutes(admin, h)
 	}
 }
 
@@ -562,4 +565,23 @@ func registerChannelRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 		channels.PUT("/:id", h.Admin.Channel.Update)
 		channels.DELETE("/:id", h.Admin.Channel.Delete)
 	}
+}
+
+// registerDashboardStatsRoutes wires the per-account and per-group dashboard
+// stats endpoints. Paths are attached under the admin group's /accounts and
+// /groups prefixes so they live alongside the existing resource routes and
+// inherit the same admin auth middleware.
+func registerDashboardStatsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	stats := h.Admin.DashboardStats
+
+	// 账号级别（按 account_id 过滤）
+	admin.GET("/accounts/:id/stats/overview", stats.AccountOverview)
+	admin.GET("/accounts/:id/stats/ips", stats.AccountIPBreakdown)
+	admin.GET("/accounts/:id/stats/users", stats.AccountUserBreakdown)
+
+	// 分组级别（按 group_id 过滤）
+	admin.GET("/groups/:id/stats/overview", stats.GroupOverview)
+	admin.GET("/groups/:id/stats/ips", stats.GroupIPBreakdown)
+	admin.GET("/groups/:id/stats/users", stats.GroupUserBreakdown)
+	admin.GET("/groups/:id/stats/accounts", stats.GroupAccountBreakdown)
 }
