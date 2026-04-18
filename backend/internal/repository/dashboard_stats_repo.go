@@ -13,6 +13,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	dbent "github.com/Wei-Shaw/sub2api/ent"
@@ -167,4 +168,135 @@ func (r *DashboardStatsRepo) Overview(ctx context.Context, f StatsFilter) (*Over
 		ov.TotalCostUSD = sumCost[0].Sum
 	}
 	return ov, nil
+}
+
+// IPBreakdownRow is one row of per-IP aggregates produced by IPBreakdown.
+type IPBreakdownRow struct {
+	IPAddress    string    `json:"ip_address"`
+	RequestCount int64     `json:"request_count"`
+	InputTokens  int64     `json:"input_tokens"`
+	OutputTokens int64     `json:"output_tokens"`
+	TotalCostUSD float64   `json:"total_cost_usd"`
+	FirstSeenAt  time.Time `json:"first_seen_at"`
+	LastSeenAt   time.Time `json:"last_seen_at"`
+	UniqueUsers  int       `json:"unique_users"`
+}
+
+// IPBreakdown returns per-IP aggregates for the given scope + window, sorted
+// by RequestCount descending and trimmed to limit. If limit <= 0 or > 500 it
+// is reset to 100. Empty IP addresses are excluded.
+//
+// Implementation note: same as Overview(), aggregates are issued as separate
+// queries to sidestep Ent struct-tag/alias mismatches between dialects. A
+// follow-up GroupBy runs per surviving row to count distinct api_key_id. The
+// known NULL-api_key_id undercount is accepted here (see Task 2 review).
+func (r *DashboardStatsRepo) IPBreakdown(ctx context.Context, f StatsFilter, limit int) ([]IPBreakdownRow, error) {
+	if err := f.Validate(); err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 500 {
+		limit = 100
+	}
+
+	// 1) Distinct IPs (excluding empty) with request count via GroupBy+Count.
+	type ipCountRow struct {
+		IPAddress string `json:"ip_address"`
+		Count     int64  `json:"count"`
+	}
+	var ipCounts []ipCountRow
+	if err := r.baseQuery(f).
+		Where(dbusagelog.IPAddressNEQ("")).
+		GroupBy(dbusagelog.FieldIPAddress).
+		Aggregate(dbent.As(dbent.Count(), "count")).
+		Scan(ctx, &ipCounts); err != nil {
+		return nil, fmt.Errorf("dashboard stats: ip group+count: %w", err)
+	}
+
+	rows := make([]IPBreakdownRow, 0, len(ipCounts))
+	for _, ic := range ipCounts {
+		rows = append(rows, IPBreakdownRow{
+			IPAddress:    ic.IPAddress,
+			RequestCount: ic.Count,
+		})
+	}
+
+	// 2) Sort by RequestCount desc, then trim to limit before issuing further
+	// per-IP queries to bound work.
+	sort.Slice(rows, func(i, j int) bool {
+		return rows[i].RequestCount > rows[j].RequestCount
+	})
+	if len(rows) > limit {
+		rows = rows[:limit]
+	}
+
+	// 3) For each surviving row, fetch per-IP aggregates (token sums, cost,
+	// first/last seen, unique users) via scoped queries.
+	for i := range rows {
+		ip := rows[i].IPAddress
+		scoped := r.baseQuery(f).Where(dbusagelog.IPAddressEQ(ip))
+
+		// Sum(input_tokens).
+		var sumInput []struct {
+			Sum int64 `json:"sum"`
+		}
+		if err := r.baseQuery(f).Where(dbusagelog.IPAddressEQ(ip)).
+			Aggregate(dbent.As(dbent.Sum(dbusagelog.FieldInputTokens), "sum")).
+			Scan(ctx, &sumInput); err != nil {
+			return nil, fmt.Errorf("dashboard stats: ip %q sum input_tokens: %w", ip, err)
+		}
+		if len(sumInput) > 0 {
+			rows[i].InputTokens = sumInput[0].Sum
+		}
+
+		// Sum(output_tokens).
+		var sumOutput []struct {
+			Sum int64 `json:"sum"`
+		}
+		if err := r.baseQuery(f).Where(dbusagelog.IPAddressEQ(ip)).
+			Aggregate(dbent.As(dbent.Sum(dbusagelog.FieldOutputTokens), "sum")).
+			Scan(ctx, &sumOutput); err != nil {
+			return nil, fmt.Errorf("dashboard stats: ip %q sum output_tokens: %w", ip, err)
+		}
+		if len(sumOutput) > 0 {
+			rows[i].OutputTokens = sumOutput[0].Sum
+		}
+
+		// Sum(total_cost).
+		var sumCost []struct {
+			Sum float64 `json:"sum"`
+		}
+		if err := r.baseQuery(f).Where(dbusagelog.IPAddressEQ(ip)).
+			Aggregate(dbent.As(dbent.Sum(dbusagelog.FieldTotalCost), "sum")).
+			Scan(ctx, &sumCost); err != nil {
+			return nil, fmt.Errorf("dashboard stats: ip %q sum total_cost: %w", ip, err)
+		}
+		if len(sumCost) > 0 {
+			rows[i].TotalCostUSD = sumCost[0].Sum
+		}
+
+		// Min(created_at) -> FirstSeenAt.
+		first, err := scoped.Clone().Order(dbent.Asc(dbusagelog.FieldCreatedAt)).First(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("dashboard stats: ip %q first_seen_at: %w", ip, err)
+		}
+		rows[i].FirstSeenAt = first.CreatedAt
+
+		// Max(created_at) -> LastSeenAt.
+		last, err := scoped.Clone().Order(dbent.Desc(dbusagelog.FieldCreatedAt)).First(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("dashboard stats: ip %q last_seen_at: %w", ip, err)
+		}
+		rows[i].LastSeenAt = last.CreatedAt
+
+		// Distinct api_key_id count.
+		apiKeyIDs, err := r.baseQuery(f).Where(dbusagelog.IPAddressEQ(ip)).
+			GroupBy(dbusagelog.FieldAPIKeyID).
+			Ints(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("dashboard stats: ip %q distinct api_key_id: %w", ip, err)
+		}
+		rows[i].UniqueUsers = len(apiKeyIDs)
+	}
+
+	return rows, nil
 }
