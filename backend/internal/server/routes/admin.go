@@ -497,6 +497,11 @@ func registerSubscriptionRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 }
 
 func registerUsageRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	// CSV export — sits at /admin/usage.csv (sibling of /admin/usage) so that it
+	// inherits the admin-auth middleware from the parent group without needing a
+	// collision-prone `/usage/:file` pattern.
+	admin.GET("/usage.csv", h.Admin.Usage.ExportCSV)
+
 	usage := admin.Group("/usage")
 	{
 		usage.GET("", h.Admin.Usage.List)
