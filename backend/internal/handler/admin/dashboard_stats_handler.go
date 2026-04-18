@@ -2,10 +2,10 @@ package admin
 
 import (
 	"context"
-	"net/http"
 	"strconv"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/response"
 	"github.com/Wei-Shaw/sub2api/internal/repository"
 
 	"github.com/gin-gonic/gin"
@@ -92,7 +92,7 @@ func parseParams(c *gin.Context) (statsParams, error) {
 func (h *DashboardStatsHandler) AccountOverview(c *gin.Context) {
 	p, err := parseParams(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	id := p.ID
@@ -102,10 +102,10 @@ func (h *DashboardStatsHandler) AccountOverview(c *gin.Context) {
 		To:        p.To,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, ov)
+	response.Success(c, ov)
 }
 
 // AccountIPBreakdown returns per-IP aggregates for a single account.
@@ -113,7 +113,7 @@ func (h *DashboardStatsHandler) AccountOverview(c *gin.Context) {
 func (h *DashboardStatsHandler) AccountIPBreakdown(c *gin.Context) {
 	p, err := parseParams(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	id := p.ID
@@ -123,10 +123,10 @@ func (h *DashboardStatsHandler) AccountIPBreakdown(c *gin.Context) {
 		To:        p.To,
 	}, p.Limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"rows": rows})
+	response.Success(c, gin.H{"rows": rows})
 }
 
 // AccountUserBreakdown returns per-(api_key, user) aggregates for a single
@@ -135,7 +135,7 @@ func (h *DashboardStatsHandler) AccountIPBreakdown(c *gin.Context) {
 func (h *DashboardStatsHandler) AccountUserBreakdown(c *gin.Context) {
 	p, err := parseParams(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	id := p.ID
@@ -145,10 +145,10 @@ func (h *DashboardStatsHandler) AccountUserBreakdown(c *gin.Context) {
 		To:        p.To,
 	}, p.Limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"rows": rows})
+	response.Success(c, gin.H{"rows": rows})
 }
 
 // GroupOverview returns aggregated usage metrics for a single group.
@@ -156,7 +156,7 @@ func (h *DashboardStatsHandler) AccountUserBreakdown(c *gin.Context) {
 func (h *DashboardStatsHandler) GroupOverview(c *gin.Context) {
 	p, err := parseParams(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	id := p.ID
@@ -166,10 +166,10 @@ func (h *DashboardStatsHandler) GroupOverview(c *gin.Context) {
 		To:      p.To,
 	})
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, ov)
+	response.Success(c, ov)
 }
 
 // GroupIPBreakdown returns per-IP aggregates scoped to a single group.
@@ -177,7 +177,7 @@ func (h *DashboardStatsHandler) GroupOverview(c *gin.Context) {
 func (h *DashboardStatsHandler) GroupIPBreakdown(c *gin.Context) {
 	p, err := parseParams(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	id := p.ID
@@ -187,10 +187,10 @@ func (h *DashboardStatsHandler) GroupIPBreakdown(c *gin.Context) {
 		To:      p.To,
 	}, p.Limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"rows": rows})
+	response.Success(c, gin.H{"rows": rows})
 }
 
 // GroupUserBreakdown returns per-(api_key, user) aggregates scoped to a single
@@ -199,7 +199,7 @@ func (h *DashboardStatsHandler) GroupIPBreakdown(c *gin.Context) {
 func (h *DashboardStatsHandler) GroupUserBreakdown(c *gin.Context) {
 	p, err := parseParams(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	id := p.ID
@@ -209,10 +209,10 @@ func (h *DashboardStatsHandler) GroupUserBreakdown(c *gin.Context) {
 		To:      p.To,
 	}, p.Limit)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"rows": rows})
+	response.Success(c, gin.H{"rows": rows})
 }
 
 // GroupAccountBreakdown splits a group's consumption across the accounts that
@@ -221,13 +221,13 @@ func (h *DashboardStatsHandler) GroupUserBreakdown(c *gin.Context) {
 func (h *DashboardStatsHandler) GroupAccountBreakdown(c *gin.Context) {
 	p, err := parseParams(c)
 	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		response.BadRequest(c, err.Error())
 		return
 	}
 	rows, err := h.repo.AccountBreakdown(c.Request.Context(), p.ID, p.From, p.To)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		response.InternalError(c, err.Error())
 		return
 	}
-	c.JSON(http.StatusOK, gin.H{"rows": rows})
+	response.Success(c, gin.H{"rows": rows})
 }

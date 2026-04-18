@@ -103,9 +103,13 @@ func TestDashboardStatsHandler_AccountOverview(t *testing.T) {
 	require.True(t, from.Equal(repo.lastFilter.From), "from mismatch: got %v want %v", repo.lastFilter.From, from)
 	require.True(t, to.Equal(repo.lastFilter.To), "to mismatch: got %v want %v", repo.lastFilter.To, to)
 
-	var got repository.Overview
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, *want, got)
+	var envelope struct {
+		Code int                 `json:"code"`
+		Data repository.Overview `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	require.Equal(t, 0, envelope.Code)
+	require.Equal(t, *want, envelope.Data)
 }
 
 func TestDashboardStatsHandler_GroupOverview(t *testing.T) {
@@ -122,9 +126,13 @@ func TestDashboardStatsHandler_GroupOverview(t *testing.T) {
 	require.Equal(t, int64(7), *repo.lastFilter.GroupID)
 	require.Nil(t, repo.lastFilter.AccountID)
 
-	var got repository.Overview
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, *want, got)
+	var envelope struct {
+		Code int                 `json:"code"`
+		Data repository.Overview `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	require.Equal(t, 0, envelope.Code)
+	require.Equal(t, *want, envelope.Data)
 }
 
 func TestDashboardStatsHandler_GroupAccountBreakdown(t *testing.T) {
@@ -141,13 +149,17 @@ func TestDashboardStatsHandler_GroupAccountBreakdown(t *testing.T) {
 	require.Equal(t, http.StatusOK, rec.Code)
 	require.Equal(t, int64(7), repo.lastAccountBreakGroup)
 
-	var body struct {
-		Rows []repository.AccountBreakdownRow `json:"rows"`
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Rows []repository.AccountBreakdownRow `json:"rows"`
+		} `json:"data"`
 	}
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	require.Len(t, body.Rows, 2)
-	require.Equal(t, int64(11), body.Rows[0].AccountID)
-	require.Equal(t, int64(12), body.Rows[1].AccountID)
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	require.Equal(t, 0, envelope.Code)
+	require.Len(t, envelope.Data.Rows, 2)
+	require.Equal(t, int64(11), envelope.Data.Rows[0].AccountID)
+	require.Equal(t, int64(12), envelope.Data.Rows[1].AccountID)
 }
 
 func TestDashboardStatsHandler_InvalidID(t *testing.T) {
