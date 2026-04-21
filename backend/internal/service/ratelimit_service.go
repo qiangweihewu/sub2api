@@ -157,6 +157,11 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			msg := "Identity verification required (400): " + upstreamMsg
 			s.handleAuthError(ctx, account, msg)
 			shouldDisable = true
+		} else if strings.Contains(strings.ToLower(upstreamMsg), "extra usage") {
+			// 第三方应用消耗 extra usage 失败（无额度或政策拒绝），暂停调度。
+			msg := "Extra usage required (400): " + upstreamMsg
+			s.handleAuthError(ctx, account, msg)
+			shouldDisable = true
 		}
 		// 其他 400 错误（如参数问题）不处理，不禁用账号
 	case 401:

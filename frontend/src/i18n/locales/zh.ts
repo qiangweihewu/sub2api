@@ -10,6 +10,9 @@ export default {
     login: '登录',
     getStarted: '立即开始',
     goToDashboard: '进入控制台',
+    // SEO 标题与副标题（用于首页 H1 与 meta description）
+    seoHeadline: 'Claude / Claude Code / ChatGPT 中转站',
+    seoSubtitle: '一站式 Claude、Claude Code、ChatGPT、Gemini API 中转，便宜稳定，按量计费，实时账单。',
     // 新增：面向用户的价值主张
     heroSubtitle: '一个密钥，畅用多个 AI 模型',
     heroDescription: '无需管理多个订阅账号，一站式接入 Claude、GPT、Gemini 等主流 AI 服务',

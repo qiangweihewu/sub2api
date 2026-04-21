@@ -90,10 +90,18 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
 
 	if shouldMimicClaudeCode {
+		systemRewritten := false
 		if !strings.Contains(strings.ToLower(mappedModel), "haiku") &&
 			!systemIncludesClaudeCodePrompt(anthropicReq.System) {
-			anthropicBody = injectClaudeCodePrompt(anthropicBody, anthropicReq.System)
+			anthropicBody = rewriteSystemForNonClaudeCode(anthropicBody, anthropicReq.System)
+			systemRewritten = true
 		}
+		// Claude Code OAuth 请求体规范化：剥离不支持的 temperature / tool_choice，
+		// 确保 tools 字段存在，模型 ID 规范化（与原生路径行为一致）
+		anthropicBody, mappedModel = normalizeClaudeOAuthRequestBody(
+			anthropicBody, mappedModel,
+			claudeOAuthNormalizeOptions{stripSystemCacheControl: !systemRewritten},
+		)
 	}
 
 	// 7. Enforce cache_control block limit
@@ -149,19 +157,40 @@ func (s *GatewayService) ForwardAsChatCompletions(
 		upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(respBody))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 
-		if s.shouldFailoverUpstreamError(resp.StatusCode) {
-			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-				Platform:           account.Platform,
-				AccountID:          account.ID,
-				AccountName:        account.Name,
-				UpstreamStatusCode: resp.StatusCode,
-				UpstreamRequestID:  resp.Header.Get("x-request-id"),
-				Kind:               "failover",
-				Message:            upstreamMsg,
-			})
-			if s.rateLimitService != nil {
-				s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody)
+		shouldFailover := s.shouldFailoverUpstreamError(resp.StatusCode)
+		if s.rateLimitService != nil {
+			if s.rateLimitService.HandleUpstreamError(ctx, account, resp.StatusCode, resp.Header, respBody) {
+				shouldFailover = true
 			}
+		}
+
+		kind := "http_error"
+		if shouldFailover {
+			kind = "failover"
+		}
+
+		upstreamDetail := ""
+		if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+			maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+			if maxBytes <= 0 {
+				maxBytes = 2048
+			}
+			upstreamDetail = truncateString(string(respBody), maxBytes)
+		}
+
+		setOpsUpstreamError(c, resp.StatusCode, upstreamMsg, upstreamDetail)
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: resp.StatusCode,
+			UpstreamRequestID:  resp.Header.Get("x-request-id"),
+			Kind:               kind,
+			Message:            upstreamMsg,
+			Detail:             upstreamDetail,
+		})
+
+		if shouldFailover {
 			return nil, &UpstreamFailoverError{
 				StatusCode:   resp.StatusCode,
 				ResponseBody: respBody,

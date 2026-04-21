@@ -10,6 +10,9 @@ export default {
     login: 'Login',
     getStarted: 'Get Started',
     goToDashboard: 'Go to Dashboard',
+    // SEO headline and subtitle (used for the home page H1 and meta description)
+    seoHeadline: 'Cheap Claude & ChatGPT API Gateway',
+    seoSubtitle: 'Pay-as-you-go tokens for Claude, Claude Code, ChatGPT, and Gemini — one unified API with transparent billing.',
     // User-focused value proposition
     heroSubtitle: 'One Key, All AI Models',
     heroDescription: 'No need to manage multiple subscriptions. Access Claude, GPT, Gemini and more with a single API key',

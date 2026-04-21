@@ -120,10 +120,10 @@
             <h1
               class="mb-4 text-4xl font-bold text-gray-900 dark:text-white md:text-5xl lg:text-6xl"
             >
-              {{ siteName }}
+              {{ siteName }} — {{ t('home.seoHeadline') }}
             </h1>
             <p class="mb-8 text-lg text-gray-600 dark:text-dark-300 md:text-xl">
-              {{ siteSubtitle }}
+              {{ siteSubtitle || t('home.seoSubtitle') }}
             </p>
 
             <!-- CTA Button -->
