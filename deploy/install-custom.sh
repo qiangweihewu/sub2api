@@ -533,12 +533,65 @@ _upgrade_fast_download() {
     print_success "Staged at $STAGE_DIR"
 }
 
+# Consumes: TARGET_VERSION, STAGE_DIR
+# Builds new image, tags previous, restarts via compose, health-checks, auto-rollback on failure.
+_upgrade_fast_switch() {
+    # Tag current latest as previous (best-effort — first upgrade may not have a latest)
+    if docker image inspect "${IMAGE_NAME}:latest" >/dev/null 2>&1; then
+        print_info "Tagging current ${IMAGE_NAME}:latest → ${IMAGE_NAME}:previous"
+        docker tag "${IMAGE_NAME}:latest" "${IMAGE_NAME}:previous"
+    fi
+
+    print_info "Building runtime image from staged binary..."
+    docker build \
+        --label "sub2api.version=${TARGET_VERSION}" \
+        -t "${IMAGE_NAME}:latest" \
+        -t "${IMAGE_NAME}:${TARGET_VERSION}" \
+        "$STAGE_DIR"
+
+    print_info "Restarting sub2api container (PG and Redis unaffected)..."
+    cd "$INSTALL_DIR/deploy"
+    docker compose -p "$COMPOSE_PROJECT" up -d sub2api
+
+    print_info "Waiting for health check (max 60s)..."
+    local retries=0
+    local healthy=0
+    while [ $retries -lt 30 ]; do
+        local status
+        status=$(docker inspect --format '{{.State.Health.Status}}' sub2api 2>/dev/null || echo "starting")
+        if [ "$status" = "healthy" ]; then
+            healthy=1
+            break
+        fi
+        sleep 2
+        retries=$((retries + 1))
+    done
+
+    if [ $healthy -eq 1 ]; then
+        print_success "Upgrade to $TARGET_VERSION succeeded."
+        rm -rf "$STAGE_DIR"
+        return 0
+    fi
+
+    # Auto-rollback
+    print_error "New container failed health check after 60s. Rolling back..."
+    if docker image inspect "${IMAGE_NAME}:previous" >/dev/null 2>&1; then
+        docker tag "${IMAGE_NAME}:previous" "${IMAGE_NAME}:latest"
+        docker compose -p "$COMPOSE_PROJECT" up -d sub2api
+        print_error "Rollback complete. Check logs: docker compose -p ${COMPOSE_PROJECT} logs sub2api"
+    else
+        print_error "No :previous image to rollback to. Container is in failed state."
+        print_error "Check logs: docker compose -p ${COMPOSE_PROJECT} logs sub2api"
+    fi
+    rm -rf "$STAGE_DIR"
+    exit 1
+}
+
 do_upgrade_fast() {
     _upgrade_fast_preflight
     _upgrade_fast_resolve_versions
     _upgrade_fast_download
-    print_info "Download + verify OK (skeleton continues in next tasks)"
-    print_info "Staged at: $STAGE_DIR"
+    _upgrade_fast_switch
 }
 
 # =============================================================================
