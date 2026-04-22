@@ -868,9 +868,9 @@ type DefaultConfig struct {
 }
 
 type RateLimitConfig struct {
-	OverloadCooldownMinutes    int `mapstructure:"overload_cooldown_minutes"`     // 529过载冷却时间(分钟)
-	OAuth401CooldownMinutes    int `mapstructure:"oauth_401_cooldown_minutes"`    // OAuth 401临时不可调度冷却(分钟)
-	ExtraUsageCooldownMinutes  int `mapstructure:"extra_usage_cooldown_minutes"`  // "Extra usage required" 临时不可调度冷却(分钟)；0 表示使用默认值(60)
+	OverloadCooldownMinutes   int `mapstructure:"overload_cooldown_minutes"`    // 529过载冷却时间(分钟)
+	OAuth401CooldownMinutes   int `mapstructure:"oauth_401_cooldown_minutes"`   // OAuth 401临时不可调度冷却(分钟)
+	ExtraUsageCooldownMinutes int `mapstructure:"extra_usage_cooldown_minutes"` // "Extra usage required" 临时不可调度冷却(分钟)；0 表示使用默认值(60)
 }
 
 // APIKeyAuthCacheConfig API Key 认证缓存配置

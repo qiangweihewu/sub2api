@@ -42,7 +42,7 @@ func (s *GatewayService) ForwardAsResponses(
 	if account.IsOAuth() && s.settingService != nil &&
 		s.settingService.IsOAuthDisabledOnCCResponses(ctx) {
 		return nil, &UpstreamFailoverError{
-			StatusCode: http.StatusServiceUnavailable,
+			StatusCode:   http.StatusServiceUnavailable,
 			ResponseBody: []byte(`{"error":{"type":"routing_policy","message":"OAuth accounts are disabled for /v1/responses by admin policy"}}`),
 		}
 	}

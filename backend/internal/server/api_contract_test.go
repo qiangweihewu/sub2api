@@ -591,6 +591,7 @@ func TestAPIContracts(t *testing.T) {
 					"enable_cch_signing": false,
 					"enable_fingerprint_unification": true,
 					"enable_metadata_passthrough": false,
+					"disable_oauth_on_cc_responses": false,
 					"web_search_emulation_enabled": false,
 					"custom_menu_items": [],
 					"custom_endpoints": [],

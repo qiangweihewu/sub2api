@@ -3,6 +3,7 @@
 package service
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -58,7 +59,7 @@ func TestHandleCCBufferedFromAnthropic_PreservesMessageStartCacheUsageAndReasoni
 	}
 
 	svc := &GatewayService{}
-	result, err := svc.handleCCBufferedFromAnthropic(resp, c, "gpt-5", "claude-sonnet-4.5", &reasoningEffort, time.Now())
+	result, err := svc.handleCCBufferedFromAnthropic(context.Background(), resp, c, &Account{}, "gpt-5", "claude-sonnet-4.5", &reasoningEffort, time.Now())
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 12, result.Usage.InputTokens)
@@ -96,7 +97,7 @@ func TestHandleCCStreamingFromAnthropic_PreservesMessageStartCacheUsageAndReason
 	}
 
 	svc := &GatewayService{}
-	result, err := svc.handleCCStreamingFromAnthropic(resp, c, "gpt-5", "claude-sonnet-4.5", &reasoningEffort, time.Now(), true)
+	result, err := svc.handleCCStreamingFromAnthropic(context.Background(), resp, c, &Account{}, "gpt-5", "claude-sonnet-4.5", &reasoningEffort, time.Now(), true)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, 20, result.Usage.InputTokens)

@@ -43,7 +43,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	if account.IsOAuth() && s.settingService != nil &&
 		s.settingService.IsOAuthDisabledOnCCResponses(ctx) {
 		return nil, &UpstreamFailoverError{
-			StatusCode: http.StatusServiceUnavailable,
+			StatusCode:   http.StatusServiceUnavailable,
 			ResponseBody: []byte(`{"error":{"type":"routing_policy","message":"OAuth accounts are disabled for /v1/chat/completions by admin policy"}}`),
 		}
 	}
