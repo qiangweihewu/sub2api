@@ -53,7 +53,11 @@
               <PaymentMethodSelector
                 :methods="methodOptions"
                 :selected="selectedMethod"
+                :publishable-key="checkout.stripe_publishable_key"
+                :amount-in-cents="expressCheckoutAmountInCents"
+                currency="cny"
                 @select="selectedMethod = $event"
+                @express-checkout="onExpressCheckout"
               />
             </div>
             <div v-if="validAmount > 0" class="card p-6">
@@ -142,7 +146,11 @@
                 <PaymentMethodSelector
                   :methods="subMethodOptions"
                   :selected="selectedMethod"
+                  :publishable-key="checkout.stripe_publishable_key"
+                  :amount-in-cents="expressCheckoutAmountInCents"
+                  currency="cny"
                   @select="selectedMethod = $event"
+                  @express-checkout="onExpressCheckout"
                 />
               </div>
               <div v-if="feeRate > 0 && selectedPlan.price > 0" class="card p-6">
@@ -300,6 +308,14 @@ const errorMessage = ref('')
 const errorHintMessage = ref('')
 const activeTab = ref<'recharge' | 'subscription'>('recharge')
 const amount = ref<number | null>(null)
+const expressCheckoutAmountInCents = computed(() => {
+  // Express Checkout requires a positive integer in the smallest currency unit.
+  // `amount` is the user-entered CNY amount (may be null or below minimum).
+  // When invalid, return 0 so StripeExpressCheckout skips mounting.
+  const a = typeof amount.value === 'number' ? amount.value : 0
+  if (!isFinite(a) || a <= 0) return 0
+  return Math.round(a * 100)
+})
 const selectedMethod = ref('')
 const selectedPlan = ref<SubscriptionPlan | null>(null)
 const previewImage = ref('')
@@ -796,6 +812,68 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     appStore.showError(buildPaymentErrorToastMessage(errorMessage.value, errorHintMessage.value))
   } finally {
     submitting.value = false
+  }
+}
+
+async function onExpressCheckout(payload: { event: any; elements: any; stripe: any }) {
+  const { event, elements, stripe } = payload
+  try {
+    // 1. Validate we have an amount entered.
+    if (!amount.value || amount.value <= 0) {
+      if (typeof event.paymentFailed === 'function') {
+        event.paymentFailed({ reason: 'fail' })
+      }
+      return
+    }
+
+    // 2. Submit the ECE elements (client-side validation, wallet sheet UI).
+    const { error: submitError } = await elements.submit()
+    if (submitError) {
+      if (typeof event.paymentFailed === 'function') {
+        event.paymentFailed({ reason: 'fail' })
+      }
+      return
+    }
+
+    // 3. Create the order on our backend with payment_type=card so the
+    //    backend uses automatic_payment_methods (supporting all activated
+    //    wallet methods). Call paymentAPI directly to get client_secret
+    //    without triggering the routing side-effects inside createOrder().
+    const orderResponse = await paymentAPI.createOrder({
+      amount: amount.value,
+      payment_type: 'card',
+      order_type: 'balance',
+      return_url: `${window.location.origin}/payment/result`,
+      is_mobile: isMobileDevice(),
+    })
+    const orderResult = orderResponse.data
+    if (!orderResult || !orderResult.client_secret) {
+      if (typeof event.paymentFailed === 'function') {
+        event.paymentFailed({ reason: 'fail' })
+      }
+      return
+    }
+
+    // 4. Confirm the payment via Stripe. On success Stripe redirects to return_url.
+    const { error: confirmError } = await stripe.confirmPayment({
+      elements,
+      clientSecret: orderResult.client_secret,
+      confirmParams: {
+        return_url: `${window.location.origin}/payment/result?order_id=${orderResult.order_id}`,
+      },
+      redirect: 'always',
+    })
+
+    if (confirmError) {
+      if (typeof event.paymentFailed === 'function') {
+        event.paymentFailed({ reason: 'fail' })
+      }
+    }
+  } catch (err) {
+    console.error('[onExpressCheckout]', err)
+    if (typeof event.paymentFailed === 'function') {
+      event.paymentFailed({ reason: 'fail' })
+    }
   }
 }
 
