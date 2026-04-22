@@ -1,0 +1,13 @@
+# Minimal runtime image for prebuilt sub2api binary.
+# Used by install-custom.sh upgrade-fast path; builds in seconds (no compilation).
+# The server binary is built with -tags embed, so frontend + migrations are inside it.
+FROM alpine:3.20
+
+RUN apk add --no-cache ca-certificates tzdata wget
+
+WORKDIR /app
+COPY server /app/main
+
+EXPOSE 8080
+
+CMD ["/app/main"]
