@@ -8204,6 +8204,18 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 
 	if shouldMimicClaudeCode {
 		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: true}
+		if s.identityService != nil {
+			fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
+			if err == nil && fp != nil {
+				_, mimicMPT, _ := s.settingService.GetGatewayForwardingSettings(ctx)
+				if !mimicMPT {
+					if metadataUserID := s.buildOAuthMetadataUserID(parsed, account, fp); metadataUserID != "" {
+						normalizeOpts.injectMetadata = true
+						normalizeOpts.metadataUserID = metadataUserID
+					}
+				}
+			}
+		}
 		body, reqModel = normalizeClaudeOAuthRequestBody(body, reqModel, normalizeOpts)
 	}
 

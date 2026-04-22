@@ -93,11 +93,26 @@ func (s *GatewayService) ForwardAsResponses(
 			anthropicBody = rewriteSystemForNonClaudeCode(anthropicBody, anthropicReq.System)
 			systemRewritten = true
 		}
+
+		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: !systemRewritten}
+		if s.identityService != nil {
+			fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
+			if err == nil && fp != nil {
+				_, mimicMPT, _ := s.settingService.GetGatewayForwardingSettings(ctx)
+				if !mimicMPT {
+					if metadataUserID := s.buildOAuthMetadataUserID(parsed, account, fp); metadataUserID != "" {
+						normalizeOpts.injectMetadata = true
+						normalizeOpts.metadataUserID = metadataUserID
+					}
+				}
+			}
+		}
+
 		// Claude Code OAuth 请求体规范化：剥离不支持的 temperature / tool_choice，
-		// 确保 tools 字段存在，模型 ID 规范化（与原生路径行为一致）
+		// 确保 tools 字段存在，模型 ID 规范化（与原生路径行为一致），注入 metadata.user_id
 		anthropicBody, mappedModel = normalizeClaudeOAuthRequestBody(
 			anthropicBody, mappedModel,
-			claudeOAuthNormalizeOptions{stripSystemCacheControl: !systemRewritten},
+			normalizeOpts,
 		)
 	}
 
