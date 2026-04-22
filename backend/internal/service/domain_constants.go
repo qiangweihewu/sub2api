@@ -249,6 +249,11 @@ const (
 	SettingKeyEnableMetadataPassthrough = "enable_metadata_passthrough"
 	// SettingKeyEnableCCHSigning 是否对 billing header 中的 cch 进行 xxHash64 签名（默认 false）
 	SettingKeyEnableCCHSigning = "enable_cch_signing"
+	// SettingKeyDisableOAuthOnCCResponses 是否禁止 Anthropic OAuth 账号服务
+	// /v1/chat/completions 和 /v1/responses 入口（默认 false）。开启后这两个
+	// 入口会跳过 OAuth 账号调度，强制走 API-key 账号，用于根治 "Extra usage
+	// required" 400。代价：若 API-key 池容量不足会返回 503，见第 6 条改进建议。
+	SettingKeyDisableOAuthOnCCResponses = "disable_oauth_on_cc_responses"
 
 	// Balance Low Notification
 	SettingKeyBalanceLowNotifyEnabled     = "balance_low_notify_enabled"      // 全局开关

@@ -1240,20 +1240,26 @@ func (a *Account) IsAnthropicOAuthOrSetupToken() bool {
 // IsTLSFingerprintEnabled 检查是否启用 TLS 指纹伪装
 // 仅适用于 Anthropic OAuth/SetupToken 类型账号
 // 启用后将模拟 Claude Code (Node.js) 客户端的 TLS 握手特征
+//
+// 默认策略（2026-04 起）：Anthropic OAuth/SetupToken 账号默认启用。
+// 原因：Anthropic 依赖 TLS 指纹（JA3/JA4）识别第三方客户端，默认使用 Go stdlib
+// TLS 握手等同于向上游明示"我不是 Node.js Claude CLI"，显著提高 400
+// "Extra usage required" 的触发率。默认开启后管理员仍可在 Extra 中显式
+// 设置 enable_tls_fingerprint=false 退出。
 func (a *Account) IsTLSFingerprintEnabled() bool {
 	// 仅支持 Anthropic OAuth/SetupToken 账号
 	if !a.IsAnthropicOAuthOrSetupToken() {
 		return false
 	}
 	if a.Extra == nil {
-		return false
+		return true
 	}
 	if v, ok := a.Extra["enable_tls_fingerprint"]; ok {
 		if enabled, ok := v.(bool); ok {
 			return enabled
 		}
 	}
-	return false
+	return true
 }
 
 // GetTLSFingerprintProfileID 获取账号绑定的 TLS 指纹模板 ID

@@ -35,6 +35,19 @@ func (s *GatewayService) ForwardAsChatCompletions(
 ) (*ForwardResult, error) {
 	startTime := time.Now()
 
+	// 0. Routing policy: optionally exclude OAuth accounts from this endpoint.
+	// When enabled, OAuth accounts get handed back via UpstreamFailoverError so
+	// the handler's failover loop can retry on the next account. This is the
+	// recommended lever to eliminate "Extra usage required" 400s at the cost
+	// of API-key pool pressure — see SettingKeyDisableOAuthOnCCResponses.
+	if account.IsOAuth() && s.settingService != nil &&
+		s.settingService.IsOAuthDisabledOnCCResponses(ctx) {
+		return nil, &UpstreamFailoverError{
+			StatusCode: http.StatusServiceUnavailable,
+			ResponseBody: []byte(`{"error":{"type":"routing_policy","message":"OAuth accounts are disabled for /v1/chat/completions by admin policy"}}`),
+		}
+	}
+
 	// 1. Parse Chat Completions request
 	var ccReq apicompat.ChatCompletionsRequest
 	if err := json.Unmarshal(body, &ccReq); err != nil {
@@ -90,6 +103,8 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
 
 	if shouldMimicClaudeCode {
+		preAudit := auditClaudeCodeShape(anthropicBody)
+
 		systemRewritten := false
 		if !strings.Contains(strings.ToLower(mappedModel), "haiku") &&
 			!systemIncludesClaudeCodePrompt(anthropicReq.System) {
@@ -117,6 +132,11 @@ func (s *GatewayService) ForwardAsChatCompletions(
 			anthropicBody, mappedModel,
 			normalizeOpts,
 		)
+
+		// Audit: compare pre/post shape so gaps in the strip logic surface as
+		// WARN logs. Emits DEBUG when normalization cleaned a leaky body.
+		postAudit := auditClaudeCodeShape(anthropicBody)
+		logClaudeCodeShapeAudit("forward_as_chat_completions", account.ID, mappedModel, preAudit, postAudit)
 	}
 
 	// 7. Enforce cache_control block limit
@@ -224,9 +244,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	var result *ForwardResult
 	var handleErr error
 	if clientStream {
-		result, handleErr = s.handleCCStreamingFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime, includeUsage)
+		result, handleErr = s.handleCCStreamingFromAnthropic(ctx, resp, c, account, originalModel, mappedModel, reasoningEffort, startTime, includeUsage)
 	} else {
-		result, handleErr = s.handleCCBufferedFromAnthropic(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+		result, handleErr = s.handleCCBufferedFromAnthropic(ctx, resp, c, account, originalModel, mappedModel, reasoningEffort, startTime)
 	}
 
 	return result, handleErr
@@ -253,8 +273,10 @@ func extractCCReasoningEffortFromBody(body []byte) *string {
 // handleCCBufferedFromAnthropic reads Anthropic SSE events, assembles the full
 // response, then converts Anthropic → Responses → Chat Completions.
 func (s *GatewayService) handleCCBufferedFromAnthropic(
+	ctx context.Context,
 	resp *http.Response,
 	c *gin.Context,
+	account *Account,
 	originalModel string,
 	mappedModel string,
 	reasoningEffort *string,
@@ -277,6 +299,7 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 		if !strings.HasPrefix(line, "event: ") {
 			continue
 		}
+		eventName := strings.TrimSpace(strings.TrimPrefix(line, "event: "))
 
 		if !scanner.Scan() {
 			break
@@ -286,6 +309,13 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 			continue
 		}
 		payload := dataLine[6:]
+
+		// Upstream error carried as an SSE event. The HTTP status was 200 so the
+		// earlier resp.StatusCode >= 400 branch did not fire; detect here and
+		// surface to the failover loop so the account can be cooled down.
+		if eventName == "error" {
+			return nil, s.handleCCSSEUpstreamError(ctx, c, account, resp, []byte(payload))
+		}
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -372,8 +402,10 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 // handleCCStreamingFromAnthropic reads Anthropic SSE events, converts each
 // to Responses events, then to Chat Completions chunks, and writes them.
 func (s *GatewayService) handleCCStreamingFromAnthropic(
+	ctx context.Context,
 	resp *http.Response,
 	c *gin.Context,
+	account *Account,
 	originalModel string,
 	mappedModel string,
 	reasoningEffort *string,
@@ -382,14 +414,24 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 ) (*ForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	if s.responseHeaderFilter != nil {
-		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	// Lazy header write: delay WriteHeader until the first real chunk so a
+	// leading SSE `event: error` can still be escalated to a transparent
+	// failover (caller's c.Writer.Size() check sees 0 bytes and re-routes).
+	headerSent := false
+	ensureHeaderSent := func() {
+		if headerSent {
+			return
+		}
+		headerSent = true
+		if s.responseHeaderFilter != nil {
+			responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		}
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Header().Set("X-Accel-Buffering", "no")
+		c.Writer.WriteHeader(http.StatusOK)
 	}
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
-	c.Writer.WriteHeader(http.StatusOK)
 
 	// Use Anthropic→Responses state machine, then convert Responses→CC
 	anthState := apicompat.NewAnthropicEventToResponsesState()
@@ -427,6 +469,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		if err != nil {
 			return false
 		}
+		ensureHeaderSent()
 		if _, err := fmt.Fprint(c.Writer, sse); err != nil {
 			return true // client disconnected
 		}
@@ -468,6 +511,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		if !strings.HasPrefix(line, "event: ") {
 			continue
 		}
+		eventName := strings.TrimSpace(strings.TrimPrefix(line, "event: "))
 
 		if !scanner.Scan() {
 			break
@@ -477,6 +521,14 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 			continue
 		}
 		payload := dataLine[6:]
+
+		// Upstream error carried as an SSE event. The HTTP status was 200 so the
+		// earlier resp.StatusCode >= 400 branch did not fire. Surface this so
+		// RateLimitService can cool down the account (e.g. "Extra usage required")
+		// and the caller can failover while header is still unsent.
+		if eventName == "error" {
+			return nil, s.handleCCSSEUpstreamError(ctx, c, account, resp, []byte(payload))
+		}
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -511,6 +563,7 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	}
 
 	// Write [DONE] marker
+	ensureHeaderSent()
 	fmt.Fprint(c.Writer, "data: [DONE]\n\n") //nolint:errcheck
 	c.Writer.Flush()
 
@@ -526,4 +579,64 @@ func writeGatewayCCError(c *gin.Context, statusCode int, errType, message string
 			"message": message,
 		},
 	})
+}
+
+// handleCCSSEUpstreamError surfaces an Anthropic SSE `event: error` payload to
+// the failover loop. Even though the HTTP status is 200, the payload carries a
+// 400-equivalent business rejection (e.g. "Extra usage required"). We:
+//  1. Invoke RateLimitService with statusCode=400 so account cooling rules fire
+//  2. Record the upstream error for ops observability (matches the HTTP 400 path)
+//  3. Return UpstreamFailoverError so the caller can retry on another account
+//
+// When the response header is still unsent the caller's writerSize check will
+// allow a transparent account switch. If headers/bytes were already sent, the
+// caller will treat this as a stream-started exhaustion and end the stream
+// cleanly — but the account is still cooled and the error is logged.
+func (s *GatewayService) handleCCSSEUpstreamError(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	resp *http.Response,
+	payload []byte,
+) error {
+	const upstreamStatus = 400
+
+	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(payload))
+	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+
+	if s.rateLimitService != nil {
+		_ = s.rateLimitService.HandleUpstreamError(ctx, account, upstreamStatus, resp.Header, payload)
+	}
+
+	upstreamDetail := ""
+	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+		maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = 2048
+		}
+		upstreamDetail = truncateString(string(payload), maxBytes)
+	}
+
+	setOpsUpstreamError(c, upstreamStatus, upstreamMsg, upstreamDetail)
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform:           account.Platform,
+		AccountID:          account.ID,
+		AccountName:        account.Name,
+		UpstreamStatusCode: upstreamStatus,
+		UpstreamRequestID:  resp.Header.Get("x-request-id"),
+		Kind:               "sse_error",
+		Message:            upstreamMsg,
+		Detail:             upstreamDetail,
+	})
+
+	logger.L().Warn("forward_as_cc: upstream sse error",
+		zap.Int64("account_id", account.ID),
+		zap.String("request_id", resp.Header.Get("x-request-id")),
+		zap.String("message", upstreamMsg),
+	)
+
+	return &UpstreamFailoverError{
+		StatusCode:   upstreamStatus,
+		ResponseBody: payload,
+	}
 }

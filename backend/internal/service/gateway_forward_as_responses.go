@@ -37,6 +37,16 @@ func (s *GatewayService) ForwardAsResponses(
 ) (*ForwardResult, error) {
 	startTime := time.Now()
 
+	// 0. Routing policy: optionally exclude OAuth accounts from this endpoint.
+	// See SettingKeyDisableOAuthOnCCResponses; mirrors ForwardAsChatCompletions.
+	if account.IsOAuth() && s.settingService != nil &&
+		s.settingService.IsOAuthDisabledOnCCResponses(ctx) {
+		return nil, &UpstreamFailoverError{
+			StatusCode: http.StatusServiceUnavailable,
+			ResponseBody: []byte(`{"error":{"type":"routing_policy","message":"OAuth accounts are disabled for /v1/responses by admin policy"}}`),
+		}
+	}
+
 	// 1. Parse Responses request
 	var responsesReq apicompat.ResponsesRequest
 	if err := json.Unmarshal(body, &responsesReq); err != nil {
@@ -87,6 +97,8 @@ func (s *GatewayService) ForwardAsResponses(
 	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
 
 	if shouldMimicClaudeCode {
+		preAudit := auditClaudeCodeShape(anthropicBody)
+
 		systemRewritten := false
 		if !strings.Contains(strings.ToLower(mappedModel), "haiku") &&
 			!systemIncludesClaudeCodePrompt(anthropicReq.System) {
@@ -114,6 +126,10 @@ func (s *GatewayService) ForwardAsResponses(
 			anthropicBody, mappedModel,
 			normalizeOpts,
 		)
+
+		// Audit shape after normalize; surfaces gaps in strip logic as WARN.
+		postAudit := auditClaudeCodeShape(anthropicBody)
+		logClaudeCodeShapeAudit("forward_as_responses", account.ID, mappedModel, preAudit, postAudit)
 	}
 
 	// 7. Enforce cache_control block limit
@@ -218,9 +234,9 @@ func (s *GatewayService) ForwardAsResponses(
 	var result *ForwardResult
 	var handleErr error
 	if clientStream {
-		result, handleErr = s.handleResponsesStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+		result, handleErr = s.handleResponsesStreamingResponse(ctx, resp, c, account, originalModel, mappedModel, reasoningEffort, startTime)
 	} else {
-		result, handleErr = s.handleResponsesBufferedStreamingResponse(resp, c, originalModel, mappedModel, reasoningEffort, startTime)
+		result, handleErr = s.handleResponsesBufferedStreamingResponse(ctx, resp, c, account, originalModel, mappedModel, reasoningEffort, startTime)
 	}
 
 	return result, handleErr
@@ -262,8 +278,10 @@ func mergeAnthropicUsage(dst *ClaudeUsage, src apicompat.AnthropicUsage) {
 // the upstream streaming response, assembles them into a complete Anthropic
 // response, converts to Responses API JSON format, and writes it to the client.
 func (s *GatewayService) handleResponsesBufferedStreamingResponse(
+	ctx context.Context,
 	resp *http.Response,
 	c *gin.Context,
+	account *Account,
 	originalModel string,
 	mappedModel string,
 	reasoningEffort *string,
@@ -287,7 +305,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 		if !strings.HasPrefix(line, "event: ") {
 			continue
 		}
-		eventType := strings.TrimPrefix(line, "event: ")
+		eventType := strings.TrimSpace(strings.TrimPrefix(line, "event: "))
 
 		// Read the data line
 		if !scanner.Scan() {
@@ -298,6 +316,12 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 			continue
 		}
 		payload := dataLine[6:]
+
+		// Upstream error carried as SSE event (HTTP 200 so outer branch missed it).
+		// Let RateLimitService cool the account and trigger failover.
+		if eventType == "error" {
+			return nil, s.handleResponsesSSEUpstreamError(ctx, c, account, resp, []byte(payload))
+		}
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -391,8 +415,10 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 // handleResponsesStreamingResponse reads Anthropic SSE events from upstream,
 // converts each to Responses SSE events, and writes them to the client.
 func (s *GatewayService) handleResponsesStreamingResponse(
+	ctx context.Context,
 	resp *http.Response,
 	c *gin.Context,
+	account *Account,
 	originalModel string,
 	mappedModel string,
 	reasoningEffort *string,
@@ -400,14 +426,23 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 ) (*ForwardResult, error) {
 	requestID := resp.Header.Get("x-request-id")
 
-	if s.responseHeaderFilter != nil {
-		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	// Lazy header: defer WriteHeader until first real chunk so a leading SSE
+	// `event: error` can still be escalated to a transparent failover.
+	headerSent := false
+	ensureHeaderSent := func() {
+		if headerSent {
+			return
+		}
+		headerSent = true
+		if s.responseHeaderFilter != nil {
+			responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+		}
+		c.Writer.Header().Set("Content-Type", "text/event-stream")
+		c.Writer.Header().Set("Cache-Control", "no-cache")
+		c.Writer.Header().Set("Connection", "keep-alive")
+		c.Writer.Header().Set("X-Accel-Buffering", "no")
+		c.Writer.WriteHeader(http.StatusOK)
 	}
-	c.Writer.Header().Set("Content-Type", "text/event-stream")
-	c.Writer.Header().Set("Cache-Control", "no-cache")
-	c.Writer.Header().Set("Connection", "keep-alive")
-	c.Writer.Header().Set("X-Accel-Buffering", "no")
-	c.Writer.WriteHeader(http.StatusOK)
 
 	state := apicompat.NewAnthropicEventToResponsesState()
 	state.Model = originalModel
@@ -463,6 +498,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 				)
 				continue
 			}
+			ensureHeaderSent()
 			if _, err := fmt.Fprint(c.Writer, sse); err != nil {
 				logger.L().Info("forward_as_responses stream: client disconnected",
 					zap.String("request_id", requestID),
@@ -483,10 +519,12 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 				if err != nil {
 					continue
 				}
+				ensureHeaderSent()
 				fmt.Fprint(c.Writer, sse) //nolint:errcheck
 			}
 			c.Writer.Flush()
 		}
+		ensureHeaderSent()
 		return resultWithUsage(), nil
 	}
 
@@ -496,7 +534,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		if !strings.HasPrefix(line, "event: ") {
 			continue
 		}
-		eventType := strings.TrimPrefix(line, "event: ")
+		eventType := strings.TrimSpace(strings.TrimPrefix(line, "event: "))
 
 		// Read data line
 		if !scanner.Scan() {
@@ -507,6 +545,11 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 			continue
 		}
 		payload := dataLine[6:]
+
+		// Upstream error carried as SSE event. Surface to failover loop.
+		if eventType == "error" {
+			return nil, s.handleResponsesSSEUpstreamError(ctx, c, account, resp, []byte(payload))
+		}
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -551,6 +594,59 @@ func writeResponsesError(c *gin.Context, statusCode int, code, message string) {
 			"message": message,
 		},
 	})
+}
+
+// handleResponsesSSEUpstreamError surfaces an Anthropic SSE `event: error`
+// payload (HTTP 200 + inline error) as an UpstreamFailoverError. Invokes
+// RateLimitService with statusCode=400 so account-cooling rules (e.g. extra
+// usage) fire, records ops telemetry, and returns the failover sentinel.
+func (s *GatewayService) handleResponsesSSEUpstreamError(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	resp *http.Response,
+	payload []byte,
+) error {
+	const upstreamStatus = 400
+
+	upstreamMsg := strings.TrimSpace(extractUpstreamErrorMessage(payload))
+	upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
+
+	if s.rateLimitService != nil {
+		_ = s.rateLimitService.HandleUpstreamError(ctx, account, upstreamStatus, resp.Header, payload)
+	}
+
+	upstreamDetail := ""
+	if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+		maxBytes := s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes
+		if maxBytes <= 0 {
+			maxBytes = 2048
+		}
+		upstreamDetail = truncateString(string(payload), maxBytes)
+	}
+
+	setOpsUpstreamError(c, upstreamStatus, upstreamMsg, upstreamDetail)
+	appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+		Platform:           account.Platform,
+		AccountID:          account.ID,
+		AccountName:        account.Name,
+		UpstreamStatusCode: upstreamStatus,
+		UpstreamRequestID:  resp.Header.Get("x-request-id"),
+		Kind:               "sse_error",
+		Message:            upstreamMsg,
+		Detail:             upstreamDetail,
+	})
+
+	logger.L().Warn("forward_as_responses: upstream sse error",
+		zap.Int64("account_id", account.ID),
+		zap.String("request_id", resp.Header.Get("x-request-id")),
+		zap.String("message", upstreamMsg),
+	)
+
+	return &UpstreamFailoverError{
+		StatusCode:   upstreamStatus,
+		ResponseBody: payload,
+	}
 }
 
 // mapUpstreamStatusCode maps upstream HTTP status codes to appropriate client-facing codes.

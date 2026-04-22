@@ -626,6 +626,7 @@ func (s *SettingService) UpdateSettings(ctx context.Context, settings *SystemSet
 	updates[SettingKeyEnableFingerprintUnification] = strconv.FormatBool(settings.EnableFingerprintUnification)
 	updates[SettingKeyEnableMetadataPassthrough] = strconv.FormatBool(settings.EnableMetadataPassthrough)
 	updates[SettingKeyEnableCCHSigning] = strconv.FormatBool(settings.EnableCCHSigning)
+	updates[SettingKeyDisableOAuthOnCCResponses] = strconv.FormatBool(settings.DisableOAuthOnCCResponses)
 
 	// Balance low notification
 	updates[SettingKeyBalanceLowNotifyEnabled] = strconv.FormatBool(settings.BalanceLowNotifyEnabled)
@@ -819,6 +820,44 @@ func (s *SettingService) IsEmailVerifyEnabled(ctx context.Context) bool {
 		return false
 	}
 	return value == "true"
+}
+
+// cachedDisableOAuthOnCCResponses uses a short atomic cache (60s TTL) so this
+// flag can be checked on the hot path of /v1/chat/completions and /v1/responses
+// without hitting the DB per request.
+type cachedDisableOAuthOnCCResponses struct {
+	value     bool
+	expiresAt int64
+}
+
+var disableOAuthOnCCResponsesCache atomic.Value // *cachedDisableOAuthOnCCResponses
+
+// IsOAuthDisabledOnCCResponses reports whether the admin has opted to route
+// /v1/chat/completions and /v1/responses through API-key accounts only,
+// excluding OAuth accounts. Used to eliminate "Extra usage required" 400s at
+// the cost of API-key pool pressure. Default false.
+func (s *SettingService) IsOAuthDisabledOnCCResponses(ctx context.Context) bool {
+	if cached, ok := disableOAuthOnCCResponsesCache.Load().(*cachedDisableOAuthOnCCResponses); ok && cached != nil {
+		if time.Now().UnixNano() < cached.expiresAt {
+			return cached.value
+		}
+	}
+	value, err := s.settingRepo.GetValue(ctx, SettingKeyDisableOAuthOnCCResponses)
+	if err != nil {
+		// On DB error, fail open (allow OAuth) and cache briefly so we don't
+		// hammer the repo when it's flaky.
+		disableOAuthOnCCResponsesCache.Store(&cachedDisableOAuthOnCCResponses{
+			value:     false,
+			expiresAt: time.Now().Add(5 * time.Second).UnixNano(),
+		})
+		return false
+	}
+	enabled := value == "true"
+	disableOAuthOnCCResponsesCache.Store(&cachedDisableOAuthOnCCResponses{
+		value:     enabled,
+		expiresAt: time.Now().Add(60 * time.Second).UnixNano(),
+	})
+	return enabled
 }
 
 // GetRegistrationEmailSuffixWhitelist returns normalized registration email suffix whitelist.
@@ -1255,6 +1294,7 @@ func (s *SettingService) parseSettings(settings map[string]string) *SystemSettin
 	}
 	result.EnableMetadataPassthrough = settings[SettingKeyEnableMetadataPassthrough] == "true"
 	result.EnableCCHSigning = settings[SettingKeyEnableCCHSigning] == "true"
+	result.DisableOAuthOnCCResponses = settings[SettingKeyDisableOAuthOnCCResponses] == "true"
 
 	// Web search emulation: quick enabled check from the JSON config
 	if raw := settings[SettingKeyWebSearchEmulationConfig]; raw != "" {

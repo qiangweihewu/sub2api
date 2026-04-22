@@ -34,6 +34,7 @@ import (
 	gocache "github.com/patrickmn/go-cache"
 	"github.com/tidwall/gjson"
 	"github.com/tidwall/sjson"
+	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/gin-gonic/gin"
@@ -641,7 +642,95 @@ func NewGatewayService(
 	if path := strings.TrimSpace(os.Getenv(debugGatewayBodyEnv)); path != "" {
 		svc.initDebugGatewayBodyFile(path)
 	}
+
+	// Startup audit: check each Anthropic OAuth account for a bound TLS profile.
+	// Accounts using the built-in default profile still emit "Go-stdlib-like"
+	// TLS signatures that Anthropic's third-party heuristic can match. Running
+	// async so DB hiccups don't block service construction.
+	go svc.auditAnthropicOAuthTLSProfiles(context.Background())
+
 	return svc
+}
+
+// auditAnthropicOAuthTLSProfiles inspects every Anthropic OAuth/SetupToken
+// account at startup and emits WARN logs for any that are likely to leak a
+// non-CC TLS signature. Specifically:
+//   - enable_tls_fingerprint explicitly set to false → full Go-stdlib handshake
+//   - enabled but no profile bound (profile_id ≤ 0) → built-in default only
+//   - bound profile_id missing in profile cache → silent fallback to default
+//
+// Each warning includes the account ID and remediation advice so operators can
+// see at a glance which accounts need a real Node.js 24 TLS profile.
+func (s *GatewayService) auditAnthropicOAuthTLSProfiles(ctx context.Context) {
+	if s.accountRepo == nil {
+		return
+	}
+
+	accounts, err := s.accountRepo.ListByPlatform(ctx, PlatformAnthropic)
+	if err != nil {
+		slog.Warn("tls_audit: list anthropic accounts failed", "error", err)
+		return
+	}
+
+	var (
+		totalOAuth    int
+		disabled      int
+		usingBuiltin  int
+		boundExplicit int
+		boundMissing  int
+	)
+
+	for i := range accounts {
+		acc := &accounts[i]
+		if !acc.IsAnthropicOAuthOrSetupToken() {
+			continue
+		}
+		totalOAuth++
+
+		if !acc.IsTLSFingerprintEnabled() {
+			disabled++
+			slog.Warn("tls_audit: TLS fingerprint disabled on OAuth account",
+				"account_id", acc.ID,
+				"account_name", acc.Name,
+				"reason", "enable_tls_fingerprint=false",
+				"impact", "upstream TLS handshake exposes Go stdlib signature")
+			continue
+		}
+
+		profileID := acc.GetTLSFingerprintProfileID()
+		if profileID <= 0 {
+			usingBuiltin++
+			slog.Warn("tls_audit: OAuth account uses built-in default TLS profile",
+				"account_id", acc.ID,
+				"account_name", acc.Name,
+				"advice", "bind a curated Node.js 24 profile via Account Management → TLS Fingerprint Profiles")
+			continue
+		}
+
+		if s.tlsFPProfileService != nil {
+			if p := s.tlsFPProfileService.GetProfileByID(profileID); p == nil {
+				boundMissing++
+				slog.Warn("tls_audit: bound TLS profile not found, fallback to default",
+					"account_id", acc.ID,
+					"account_name", acc.Name,
+					"profile_id", profileID,
+					"advice", "profile was deleted; rebind a valid profile")
+				continue
+			}
+		}
+		boundExplicit++
+	}
+
+	if totalOAuth == 0 {
+		return
+	}
+
+	slog.Info("tls_audit: Anthropic OAuth account summary",
+		"total", totalOAuth,
+		"bound_explicit_profile", boundExplicit,
+		"using_builtin_default", usingBuiltin,
+		"tls_disabled", disabled,
+		"bound_profile_missing", boundMissing)
 }
 
 // GenerateSessionHash 从预解析请求计算粘性会话 hash
@@ -1034,6 +1123,43 @@ func ensureClaudeOAuthMetadataUserID(body []byte, userID string) ([]byte, bool) 
 	return setJSONRawBytes(body, "metadata", raw)
 }
 
+// pruneClaudeOAuthMetadataToUserIDOnly strips every metadata key except user_id.
+// Real Claude Code sends metadata = {"user_id": "..."} exactly; extra keys
+// (e.g. client-provided tracking ids) flag the request as non-CC on Anthropic's
+// side. Only runs when metadata is an object with a non-empty user_id.
+func pruneClaudeOAuthMetadataToUserIDOnly(body []byte) ([]byte, bool) {
+	metadata := gjson.GetBytes(body, "metadata")
+	if !metadata.Exists() || metadata.Type == gjson.Null {
+		return body, false
+	}
+	if !strings.HasPrefix(strings.TrimSpace(metadata.Raw), "{") {
+		return body, false
+	}
+
+	userID := metadata.Get("user_id")
+	if !userID.Exists() || userID.Type != gjson.String || strings.TrimSpace(userID.String()) == "" {
+		return body, false
+	}
+
+	hasExtra := false
+	metadata.ForEach(func(key, _ gjson.Result) bool {
+		if key.String() != "user_id" {
+			hasExtra = true
+			return false
+		}
+		return true
+	})
+	if !hasExtra {
+		return body, false
+	}
+
+	raw, err := marshalAnthropicMetadata(userID.String())
+	if err != nil {
+		return body, false
+	}
+	return setJSONRawBytes(body, "metadata", raw)
+}
+
 func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAuthNormalizeOptions) ([]byte, string) {
 	if len(body) == 0 {
 		return body, modelID
@@ -1072,18 +1198,27 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 			out = next
 			modified = true
 		}
-	}
-
-	if gjson.GetBytes(out, "temperature").Exists() {
-		if next, ok := deleteJSONPathBytes(out, "temperature"); ok {
+		// Real Claude Code emits metadata = {"user_id": "..."} with no other keys.
+		// After injecting/ensuring user_id, prune any additional keys so our
+		// request body exactly matches CC's shape.
+		if next, changed := pruneClaudeOAuthMetadataToUserIDOnly(out); changed {
 			out = next
 			modified = true
 		}
 	}
-	if gjson.GetBytes(out, "tool_choice").Exists() {
-		if next, ok := deleteJSONPathBytes(out, "tool_choice"); ok {
-			out = next
-			modified = true
+
+	// Strip fields real Claude Code never sends on /v1/messages. Leaving any
+	// of these in place is an obvious third-party signature to Anthropic's
+	// heuristic detector and forces the request into "extra usage" mode.
+	//   - temperature / tool_choice: OpenAI-compat clients always include
+	//   - top_p / top_k: sampling controls CC never exposes
+	//   - stop_sequences: not used by CC; some OpenAI SDKs set empty array
+	for _, field := range claudeOAuthStripFields {
+		if gjson.GetBytes(out, field).Exists() {
+			if next, ok := deleteJSONPathBytes(out, field); ok {
+				out = next
+				modified = true
+			}
 		}
 	}
 
@@ -1092,6 +1227,116 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	}
 
 	return out, modelID
+}
+
+// claudeOAuthStripFields enumerates top-level request fields that real Claude
+// Code never sends on /v1/messages. They are removed when mimicking CC to
+// avoid Anthropic's third-party heuristic ("Extra usage required") rejection.
+var claudeOAuthStripFields = []string{
+	"temperature",
+	"tool_choice",
+	"top_p",
+	"top_k",
+	"stop_sequences",
+}
+
+// ClaudeCodeShapeAudit captures structural divergences from real Claude Code
+// request bodies. Non-empty Leaks / MetadataExtra means the payload carries
+// fingerprints that Anthropic's third-party detector can match on.
+type ClaudeCodeShapeAudit struct {
+	Leaks           []string // top-level fields CC never sends
+	MetadataExtra   []string // metadata keys other than user_id
+	SystemShape     string   // "missing" | "string" | "array[N]" | "other"
+	ToolsCount      int
+	HasThinking     bool
+	HasOutputConfig bool
+}
+
+// IsClean reports whether the body looks like a real Claude Code request.
+func (a ClaudeCodeShapeAudit) IsClean() bool {
+	return len(a.Leaks) == 0 && len(a.MetadataExtra) == 0
+}
+
+// String returns a compact, log-friendly representation.
+func (a ClaudeCodeShapeAudit) String() string {
+	return fmt.Sprintf(
+		"leaks=%v metadata_extra=%v system=%s tools=%d thinking=%t output_config=%t",
+		a.Leaks, a.MetadataExtra, a.SystemShape, a.ToolsCount, a.HasThinking, a.HasOutputConfig,
+	)
+}
+
+// auditClaudeCodeShape inspects an Anthropic-format request body and reports
+// structural features that deviate from real Claude Code output. Used by
+// gateway forwarding paths to detect third-party fingerprints that survived
+// request normalization.
+func auditClaudeCodeShape(body []byte) ClaudeCodeShapeAudit {
+	var a ClaudeCodeShapeAudit
+
+	for _, field := range claudeOAuthStripFields {
+		if gjson.GetBytes(body, field).Exists() {
+			a.Leaks = append(a.Leaks, field)
+		}
+	}
+
+	sys := gjson.GetBytes(body, "system")
+	switch {
+	case !sys.Exists():
+		a.SystemShape = "missing"
+	case sys.Type == gjson.String:
+		a.SystemShape = "string"
+	case sys.IsArray():
+		count := 0
+		sys.ForEach(func(_, _ gjson.Result) bool { count++; return true })
+		a.SystemShape = fmt.Sprintf("array[%d]", count)
+	default:
+		a.SystemShape = "other"
+	}
+
+	if tools := gjson.GetBytes(body, "tools"); tools.IsArray() {
+		tools.ForEach(func(_, _ gjson.Result) bool {
+			a.ToolsCount++
+			return true
+		})
+	}
+
+	a.HasThinking = gjson.GetBytes(body, "thinking").Exists()
+	a.HasOutputConfig = gjson.GetBytes(body, "output_config").Exists()
+
+	if metadata := gjson.GetBytes(body, "metadata"); metadata.IsObject() {
+		metadata.ForEach(func(key, _ gjson.Result) bool {
+			if key.String() != "user_id" {
+				a.MetadataExtra = append(a.MetadataExtra, key.String())
+			}
+			return true
+		})
+	}
+
+	return a
+}
+
+// logClaudeCodeShapeAudit emits a log describing request body divergence from
+// real Claude Code. Logs at WARN when shape leaks persist after normalization
+// (indicating a gap in the strip logic), DEBUG when normalization cleaned a
+// previously leaky body. Silent when the body was already clean.
+func logClaudeCodeShapeAudit(pathLabel string, accountID int64, model string, pre, post ClaudeCodeShapeAudit) {
+	if !post.IsClean() {
+		logger.L().Warn("gateway: claude-code shape leak after normalize",
+			zap.String("path", pathLabel),
+			zap.Int64("account_id", accountID),
+			zap.String("model", model),
+			zap.String("pre_audit", pre.String()),
+			zap.String("post_audit", post.String()),
+		)
+		return
+	}
+	if !pre.IsClean() {
+		logger.L().Debug("gateway: claude-code shape normalized",
+			zap.String("path", pathLabel),
+			zap.Int64("account_id", accountID),
+			zap.String("model", model),
+			zap.String("pre_audit", pre.String()),
+		)
+	}
 }
 
 func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account *Account, fp *Fingerprint) string {
