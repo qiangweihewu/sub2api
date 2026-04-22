@@ -125,6 +125,19 @@ build_backend() {
     print_success "Backend built: $(du -h "$REPO_ROOT/dist/server" | awk '{print $1}')"
 }
 
+package_and_checksum() {
+    print_info "Packaging tarball..."
+    (
+        cd "$REPO_ROOT/dist"
+        tar -czf sub2api-linux-amd64.tar.gz server
+        # shasum -a 256 is portable on Mac; its output matches Linux sha256sum's format
+        shasum -a 256 sub2api-linux-amd64.tar.gz > checksums.txt
+        print_success "Packaged: $(ls -lh sub2api-linux-amd64.tar.gz | awk '{print $5}')"
+        print_info "Checksums:"
+        cat checksums.txt
+    )
+}
+
 main() {
     local version
     version=$(resolve_version "${1:-}")
@@ -135,7 +148,8 @@ main() {
     clean_dist
     build_frontend
     build_backend "${version#v}"
-    print_success "Backend stage done — stopping here for this step"
+    package_and_checksum
+    print_warning "Release creation skipped — run with publish step (next task)"
 }
 
 # Only run main if executed directly (allows sourcing for tests)
