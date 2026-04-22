@@ -675,7 +675,25 @@ main() {
                 print_error "Sub2API not installed. Run without arguments to install first."
                 exit 1
             fi
+            # Ensure we have the latest install-custom.sh and Dockerfile.runtime
+            cd "$INSTALL_DIR"
+            print_info "Syncing code (for Dockerfile.runtime and script updates)..."
+            git pull origin main
+            do_upgrade_fast
+            exit 0
+            ;;
+        upgrade-from-source)
+            check_root
+            if [ ! -d "$INSTALL_DIR/.git" ]; then
+                print_error "Sub2API not installed. Run without arguments to install first."
+                exit 1
+            fi
             do_upgrade
+            exit 0
+            ;;
+        rollback)
+            check_root
+            do_rollback
             exit 0
             ;;
         uninstall|remove)
@@ -687,9 +705,14 @@ main() {
             echo "Usage: $0 [command]"
             echo ""
             echo "Commands:"
-            echo "  (none)     Install Sub2API (clone, build, start)"
-            echo "  upgrade    Pull latest code, rebuild, restart"
-            echo "  uninstall  Stop and remove everything"
+            echo "  (none)                Install Sub2API (clone, build, start)"
+            echo "  upgrade               Fast upgrade: pull prebuilt binary from latest GitHub Release"
+            echo "                        Env: VERSION=vX.Y.Z  target specific version"
+            echo "                             FORCE=1         re-run even if already on target"
+            echo "                             NO_RELEASE_FALLBACK=1  fail instead of source-build fallback"
+            echo "  upgrade-from-source   Legacy: git pull + docker build (slow, uses lots of RAM)"
+            echo "  rollback              Revert to ${IMAGE_NAME}:previous image"
+            echo "  uninstall             Stop and remove everything"
             echo ""
             exit 0
             ;;
