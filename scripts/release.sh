@@ -90,9 +90,11 @@ clean_dist() {
 
 build_frontend() {
     print_info "Building frontend (vite build)..."
-    cd "$REPO_ROOT/frontend"
-    pnpm install --frozen-lockfile
-    pnpm run build
+    (
+        cd "$REPO_ROOT/frontend"
+        pnpm install --frozen-lockfile
+        pnpm run build
+    )
     # Output goes to $REPO_ROOT/backend/internal/web/dist per vite.config.ts
     if [ ! -f "$REPO_ROOT/backend/internal/web/dist/index.html" ]; then
         print_error "Frontend build did not produce backend/internal/web/dist/index.html"
