@@ -691,7 +691,11 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
       }
     }
     const visibleMethod = normalizeVisibleMethod(requestType) || requestType
-    const stripeMethod = visibleMethod === 'wxpay' ? 'wechat_pay' : 'alipay'
+    const stripeMethod = (() => {
+      if (visibleMethod === 'wxpay') return 'wechat_pay'
+      if (visibleMethod === 'card') return 'card'
+      return 'alipay'
+    })()
     const stripeRouteUrl = result.client_secret
       ? router.resolve({
         path: '/payment/stripe',
