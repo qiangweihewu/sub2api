@@ -418,9 +418,59 @@ _upgrade_fast_preflight() {
     fi
 }
 
+# Returns via globals: TARGET_VERSION, CURRENT_VERSION
+# Exits (via fallback or error) if target cannot be determined.
+_upgrade_fast_resolve_versions() {
+    # Target: env VERSION wins, else GitHub "latest"
+    if [ -n "${VERSION:-}" ]; then
+        TARGET_VERSION="$VERSION"
+    else
+        print_info "Fetching latest release tag from GitHub..."
+        local api_response
+        if ! api_response=$(curl -fsSL --max-time 30 \
+            "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null); then
+            print_warning "GitHub API unreachable or no releases yet."
+            if [ "${NO_RELEASE_FALLBACK:-0}" = "1" ]; then
+                print_error "NO_RELEASE_FALLBACK=1 set; not falling back to source build."
+                exit 1
+            fi
+            print_info "Falling back to source build..."
+            do_upgrade
+            exit $?
+        fi
+        TARGET_VERSION=$(echo "$api_response" | jq -r '.tag_name // empty')
+        if [ -z "$TARGET_VERSION" ] || [ "$TARGET_VERSION" = "null" ]; then
+            print_warning "No release found in GitHub API response."
+            if [ "${NO_RELEASE_FALLBACK:-0}" = "1" ]; then
+                print_error "NO_RELEASE_FALLBACK=1 set; not falling back."
+                exit 1
+            fi
+            print_info "Falling back to source build..."
+            do_upgrade
+            exit $?
+        fi
+    fi
+
+    # Current: read sub2api container's image label
+    CURRENT_VERSION=$(docker inspect --format '{{ index .Config.Labels "sub2api.version" }}' sub2api 2>/dev/null || echo "")
+    if [ -z "$CURRENT_VERSION" ]; then
+        CURRENT_VERSION="(unknown — no label on current image)"
+    fi
+
+    print_info "Current version: $CURRENT_VERSION"
+    print_info "Target version:  $TARGET_VERSION"
+
+    # Idempotency
+    if [ "$CURRENT_VERSION" = "$TARGET_VERSION" ] && [ "${FORCE:-0}" != "1" ]; then
+        print_success "Already on $TARGET_VERSION. Pass FORCE=1 to re-run."
+        exit 0
+    fi
+}
+
 do_upgrade_fast() {
     _upgrade_fast_preflight
-    print_info "do_upgrade_fast: pre-flight OK (skeleton, logic coming in later tasks)"
+    _upgrade_fast_resolve_versions
+    print_info "Version resolution OK (skeleton continues in next tasks)"
 }
 
 # =============================================================================
