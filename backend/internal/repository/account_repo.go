@@ -1144,12 +1144,17 @@ func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, 
 }
 
 func (r *accountRepository) SetTempUnschedulableWithStep(ctx context.Context, id int64, until time.Time, reason string, stepIndex int) error {
-	err := r.client.Account.UpdateOneID(id).
-		SetTempUnschedulableUntil(until).
-		SetTempUnschedulableReason(reason).
-		SetTempUnschedStepIndex(stepIndex).
-		ClearTempUnschedLastRecoveredAt().
-		Exec(ctx)
+	_, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET temp_unschedulable_until = $1,
+			temp_unschedulable_reason = $2,
+			temp_unsched_step_index = $3,
+			temp_unsched_last_recovered_at = NULL,
+			updated_at = NOW()
+		WHERE id = $4
+			AND deleted_at IS NULL
+			AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until < $1)
+	`, until, reason, stepIndex, id)
 	if err != nil {
 		return err
 	}
@@ -1161,23 +1166,33 @@ func (r *accountRepository) SetTempUnschedulableWithStep(ctx context.Context, id
 }
 
 func (r *accountRepository) StampTempUnschedRecovered(ctx context.Context, id int64, recoveredAt time.Time) error {
-	acct, err := r.client.Account.Get(ctx, id)
+	_, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET temp_unsched_last_recovered_at = $1,
+			updated_at = NOW()
+		WHERE id = $2
+			AND deleted_at IS NULL
+			AND (temp_unsched_last_recovered_at IS NULL OR temp_unsched_last_recovered_at < $1)
+	`, recoveredAt, id)
 	if err != nil {
 		return err
 	}
-	if acct.TempUnschedLastRecoveredAt != nil && !acct.TempUnschedLastRecoveredAt.Before(recoveredAt) {
-		return nil
-	}
-	return r.client.Account.UpdateOneID(id).
-		SetTempUnschedLastRecoveredAt(recoveredAt).
-		Exec(ctx)
+	return nil
 }
 
 func (r *accountRepository) ClearTempUnschedulableStreak(ctx context.Context, id int64) error {
-	return r.client.Account.UpdateOneID(id).
-		ClearTempUnschedStepIndex().
-		ClearTempUnschedLastRecoveredAt().
-		Exec(ctx)
+	_, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET temp_unsched_step_index = NULL,
+			temp_unsched_last_recovered_at = NULL,
+			updated_at = NOW()
+		WHERE id = $1
+			AND deleted_at IS NULL
+	`, id)
+	if err != nil {
+		return err
+	}
+	return nil
 }
 
 func (r *accountRepository) ClearTempUnschedulable(ctx context.Context, id int64) error {
