@@ -151,24 +151,31 @@ func TestPcAggregateMethodLimits(t *testing.T) {
 func TestPcGroupByPaymentType(t *testing.T) {
 	t.Parallel()
 
-	t.Run("stripe instance maps all types to stripe group", func(t *testing.T) {
+	t.Run("stripe instance buckets per sub-method (no stripe key)", func(t *testing.T) {
 		t.Parallel()
 		stripe := makeInstance(1, payment.TypeStripe, "card,alipay,link,wxpay", "")
 		easypay := makeInstance(2, payment.TypeEasyPay, "alipay,wxpay", "")
 
 		groups := pcGroupByPaymentType([]*dbent.PaymentProviderInstance{stripe, easypay})
 
-		// Stripe instance should only be in "stripe" group
-		if len(groups[payment.TypeStripe]) != 1 || groups[payment.TypeStripe][0].ID != 1 {
-			t.Fatalf("stripe group should contain only stripe instance, got %v", groups[payment.TypeStripe])
+		// Stripe sub-methods get their own buckets.
+		if got := len(groups[payment.TypeCard]); got != 1 || groups[payment.TypeCard][0].ID != 1 {
+			t.Fatalf("card group should contain only stripe instance, got %v", groups[payment.TypeCard])
 		}
-		// alipay group should only contain easypay, NOT stripe
-		if len(groups[payment.TypeAlipay]) != 1 || groups[payment.TypeAlipay][0].ID != 2 {
-			t.Fatalf("alipay group should contain only easypay instance, got %v", groups[payment.TypeAlipay])
+		if got := len(groups[payment.TypeLink]); got != 1 || groups[payment.TypeLink][0].ID != 1 {
+			t.Fatalf("link group should contain only stripe instance, got %v", groups[payment.TypeLink])
 		}
-		// wxpay group should only contain easypay, NOT stripe
-		if len(groups[payment.TypeWxpay]) != 1 || groups[payment.TypeWxpay][0].ID != 2 {
-			t.Fatalf("wxpay group should contain only easypay instance, got %v", groups[payment.TypeWxpay])
+		// alipay group should contain BOTH stripe and easypay (they each support alipay).
+		if got := len(groups[payment.TypeAlipay]); got != 2 {
+			t.Fatalf("alipay group should have 2 instances (stripe + easypay), got %d", got)
+		}
+		// wxpay group should contain BOTH stripe and easypay.
+		if got := len(groups[payment.TypeWxpay]); got != 2 {
+			t.Fatalf("wxpay group should have 2 instances (stripe + easypay), got %d", got)
+		}
+		// No collapsed "stripe" bucket.
+		if _, present := groups[payment.TypeStripe]; present {
+			t.Fatalf("stripe bucket should NOT exist (per-sub-method bucketing), got %v", groups[payment.TypeStripe])
 		}
 	})
 
@@ -187,16 +194,42 @@ func TestPcGroupByPaymentType(t *testing.T) {
 		}
 	})
 
-	t.Run("stripe with no supported types still in stripe group", func(t *testing.T) {
+	t.Run("stripe with empty supported_types produces no buckets", func(t *testing.T) {
 		t.Parallel()
 		stripe := makeInstance(1, payment.TypeStripe, "", "")
 
 		groups := pcGroupByPaymentType([]*dbent.PaymentProviderInstance{stripe})
 
-		if len(groups[payment.TypeStripe]) != 1 {
-			t.Fatalf("stripe with empty types should still be in stripe group, got %v", groups)
+		// With no supported_types, the loop has nothing to add. No buckets at all.
+		if len(groups) != 0 {
+			t.Fatalf("stripe with empty types should produce no buckets, got %v", groups)
 		}
 	})
+}
+
+func TestPcGroupByPaymentTypeStripeBucketsPerSubMethod(t *testing.T) {
+	t.Parallel()
+
+	stripe := makeInstance(1, payment.TypeStripe, "card,alipay,wxpay", "")
+	easypay := makeInstance(2, payment.TypeEasyPay, "alipay", "")
+
+	groups := pcGroupByPaymentType([]*dbent.PaymentProviderInstance{stripe, easypay})
+
+	// Stripe should produce per-sub-method buckets (no collapsed "stripe" bucket).
+	if got := len(groups[payment.TypeCard]); got != 1 || groups[payment.TypeCard][0].ID != 1 {
+		t.Errorf("group[card] should contain only stripe instance, got %v", groups[payment.TypeCard])
+	}
+	if got := len(groups[payment.TypeWxpay]); got != 1 || groups[payment.TypeWxpay][0].ID != 1 {
+		t.Errorf("group[wxpay] should contain only stripe instance, got %v", groups[payment.TypeWxpay])
+	}
+	// alipay should contain BOTH stripe and easypay.
+	if got := len(groups[payment.TypeAlipay]); got != 2 {
+		t.Errorf("group[alipay] should contain both stripe (id=1) and easypay (id=2), got %d entries: %v", got, groups[payment.TypeAlipay])
+	}
+	// The collapsed "stripe" bucket must NOT exist.
+	if _, present := groups[payment.TypeStripe]; present {
+		t.Errorf("group[stripe] should NOT exist after refactor (each sub-method gets its own bucket), got %v", groups[payment.TypeStripe])
+	}
 }
 
 func TestPcComputeGlobalRange(t *testing.T) {

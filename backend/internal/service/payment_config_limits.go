@@ -12,7 +12,6 @@ import (
 
 // GetAvailableMethodLimits collects all payment types from enabled provider
 // instances and returns limits for each, plus the global widest range.
-// Stripe sub-types (card, link) are aggregated under "stripe".
 func (s *PaymentConfigService) GetAvailableMethodLimits(ctx context.Context) (*MethodLimitsResponse, error) {
 	instances, err := s.entClient.PaymentProviderInstance.Query().
 		Where(paymentproviderinstance.EnabledEQ(true)).All(ctx)
@@ -88,9 +87,10 @@ func (s *PaymentConfigService) GetMethodLimits(ctx context.Context, types []stri
 }
 
 // pcGroupByPaymentType groups instances by user-facing payment type.
-// For Stripe providers, ALL sub-types (card, link, alipay, wxpay) map to "stripe"
-// because the user sees a single "Stripe" button, not individual sub-methods.
-// Uses a seen set to avoid counting one instance twice.
+// Each provider's supported_types is split and every entry becomes its own
+// bucket. For Stripe, this means one bucket per sub-method (card, alipay, etc.)
+// so the frontend can render an independent button for each.
+// Uses a seen set to avoid counting one instance twice within a single bucket.
 func pcGroupByPaymentType(instances []*dbent.PaymentProviderInstance) map[string][]*dbent.PaymentProviderInstance {
 	typeInstances := make(map[string][]*dbent.PaymentProviderInstance)
 	seen := make(map[string]map[int64]bool)
@@ -104,11 +104,6 @@ func pcGroupByPaymentType(instances []*dbent.PaymentProviderInstance) map[string
 		}
 	}
 	for _, inst := range instances {
-		// Stripe provider: all sub-types → single "stripe" group
-		if inst.ProviderKey == payment.TypeStripe {
-			add(payment.TypeStripe, inst)
-			continue
-		}
 		for _, t := range splitTypes(inst.SupportedTypes) {
 			add(t, inst)
 		}

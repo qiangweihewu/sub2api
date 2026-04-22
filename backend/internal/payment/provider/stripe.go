@@ -72,34 +72,9 @@ var stripePaymentMethodTypes = map[string][]string{
 func (s *Stripe) CreatePayment(ctx context.Context, req payment.CreatePaymentRequest) (*payment.CreatePaymentResponse, error) {
 	s.ensureInit()
 
-	amountInCents, err := payment.YuanToFen(req.Amount)
+	params, err := buildPaymentIntentParams(req)
 	if err != nil {
 		return nil, fmt.Errorf("stripe create payment: %w", err)
-	}
-
-	// Collect all Stripe payment_method_types from the instance's configured sub-methods
-	methods := resolveStripeMethodTypes(req.InstanceSubMethods)
-
-	pmTypes := make([]*string, len(methods))
-	for i, m := range methods {
-		pmTypes[i] = stripe.String(m)
-	}
-
-	params := &stripe.PaymentIntentCreateParams{
-		Amount:             stripe.Int64(amountInCents),
-		Currency:           stripe.String(stripeCurrency),
-		PaymentMethodTypes: pmTypes,
-		Description:        stripe.String(req.Subject),
-		Metadata:           map[string]string{"orderId": req.OrderID},
-	}
-
-	// WeChat Pay requires payment_method_options with client type
-	if hasStripeMethod(methods, "wechat_pay") {
-		params.PaymentMethodOptions = &stripe.PaymentIntentCreatePaymentMethodOptionsParams{
-			WeChatPay: &stripe.PaymentIntentCreatePaymentMethodOptionsWeChatPayParams{
-				Client: stripe.String("web"),
-			},
-		}
 	}
 
 	params.SetIdempotencyKey(fmt.Sprintf("pi-%s", req.OrderID))
@@ -114,6 +89,50 @@ func (s *Stripe) CreatePayment(ctx context.Context, req payment.CreatePaymentReq
 		TradeNo:      pi.ID,
 		ClientSecret: pi.ClientSecret,
 	}, nil
+}
+
+// buildPaymentIntentParams converts a CreatePaymentRequest into Stripe API params.
+// For PaymentType="card", uses automatic_payment_methods so Stripe presents all
+// activated methods (card + Apple Pay/Google Pay/Link/Amazon Pay/Cash App Pay)
+// based on browser/region capability detection. For other methods (alipay,
+// wxpay, link), uses explicit payment_method_types.
+func buildPaymentIntentParams(req payment.CreatePaymentRequest) (*stripe.PaymentIntentCreateParams, error) {
+	amountInCents, err := payment.YuanToFen(req.Amount)
+	if err != nil {
+		return nil, err
+	}
+
+	params := &stripe.PaymentIntentCreateParams{
+		Amount:      stripe.Int64(amountInCents),
+		Currency:    stripe.String(stripeCurrency),
+		Description: stripe.String(req.Subject),
+		Metadata:    map[string]string{"orderId": req.OrderID},
+	}
+
+	if req.PaymentType == payment.TypeCard {
+		params.AutomaticPaymentMethods = &stripe.PaymentIntentCreateAutomaticPaymentMethodsParams{
+			Enabled: stripe.Bool(true),
+		}
+		return params, nil
+	}
+
+	// Explicit payment_method_types path for alipay / wxpay / link.
+	methods := resolveStripeMethodTypes(req.InstanceSubMethods)
+	pmTypes := make([]*string, len(methods))
+	for i, m := range methods {
+		pmTypes[i] = stripe.String(m)
+	}
+	params.PaymentMethodTypes = pmTypes
+
+	if hasStripeMethod(methods, "wechat_pay") {
+		params.PaymentMethodOptions = &stripe.PaymentIntentCreatePaymentMethodOptionsParams{
+			WeChatPay: &stripe.PaymentIntentCreatePaymentMethodOptionsWeChatPayParams{
+				Client: stripe.String("web"),
+			},
+		}
+	}
+
+	return params, nil
 }
 
 // QueryOrder retrieves a PaymentIntent by ID.
