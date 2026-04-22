@@ -542,6 +542,9 @@ _upgrade_fast_switch() {
         docker tag "${IMAGE_NAME}:latest" "${IMAGE_NAME}:previous"
     fi
 
+    # Best-effort pg_dump backup before swapping. Never blocks upgrade.
+    _upgrade_fast_backup_database
+
     print_info "Building runtime image from staged binary..."
     docker build \
         --label "sub2api.version=${TARGET_VERSION}" \
@@ -583,8 +586,42 @@ _upgrade_fast_switch() {
         print_error "No :previous image to rollback to. Container is in failed state."
         print_error "Check logs: docker compose -p ${COMPOSE_PROJECT} logs sub2api"
     fi
+    print_error ""
+    print_error "If the logs above contain 'migration <file> checksum mismatch', upstream"
+    print_error "likely rewrote one or more historical migration files. Fix with:"
+    print_error "  sudo bash $INSTALL_DIR/deploy/fix-migration-checksums.sh          # dry-run report"
+    print_error "  sudo bash $INSTALL_DIR/deploy/fix-migration-checksums.sh --apply  # write fixes"
+    print_error "then retry the upgrade."
     rm -rf "$STAGE_DIR"
     exit 1
+}
+
+# _upgrade_fast_backup_database snapshots PostgreSQL via pg_dump before the
+# image swap so we have a last-known-good state if a migration goes sideways.
+# Failures are non-fatal: print a warning and continue.
+_upgrade_fast_backup_database() {
+    if ! docker ps --format '{{.Names}}' | grep -q '^sub2api-postgres$'; then
+        print_warning "sub2api-postgres not running; skipping pre-upgrade backup."
+        return 0
+    fi
+    local backup_dir="$INSTALL_DIR/backups"
+    local backup_file="$backup_dir/pre-${TARGET_VERSION}-$(date +%Y%m%d-%H%M%S).sql.gz"
+    local pg_user pg_db
+    pg_user=$(grep '^POSTGRES_USER=' "$INSTALL_DIR/deploy/.env" 2>/dev/null | cut -d= -f2 | tr -d '"')
+    pg_db=$(grep '^POSTGRES_DB=' "$INSTALL_DIR/deploy/.env" 2>/dev/null | cut -d= -f2 | tr -d '"')
+    pg_user=${pg_user:-sub2api}
+    pg_db=${pg_db:-sub2api}
+
+    mkdir -p "$backup_dir"
+    print_info "Backing up PostgreSQL to $backup_file ..."
+    if docker exec "sub2api-postgres" pg_dump -U "$pg_user" "$pg_db" 2>/dev/null | gzip > "$backup_file"; then
+        local size
+        size=$(du -h "$backup_file" 2>/dev/null | cut -f1)
+        print_success "Backup saved ($size). Retain or clean up manually from $backup_dir."
+    else
+        print_warning "pg_dump failed; proceeding anyway. Investigate if the upgrade misbehaves."
+        rm -f "$backup_file"
+    fi
 }
 
 do_upgrade_fast() {

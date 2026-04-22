@@ -663,3 +663,77 @@ curl -sSL https://raw.githubusercontent.com/qiangweihewu/sub2api/main/deploy/ins
 8. `docker compose up -d sub2api` (PG and Redis unaffected)
 9. Polls container health for up to 60 seconds
 10. On health failure: auto-rollback to `:previous` image
+
+### Pre-upgrade database backup
+
+Each fast upgrade runs `pg_dump` into
+`/opt/sub2api/backups/pre-<version>-<timestamp>.sql.gz` right before the image
+swap. A failed backup only logs a warning — the upgrade still proceeds — but
+when things break you have a last-known-good snapshot:
+
+```bash
+# Restore (only if really needed):
+gunzip < /opt/sub2api/backups/pre-v0.1.115-20260423-081000.sql.gz \
+  | docker exec -i sub2api-postgres psql -U sub2api -d sub2api
+```
+
+Backups are kept indefinitely. Clean up old ones manually when disk gets tight.
+
+## Troubleshooting upgrades
+
+### Symptom: health check fails and container rolls back
+
+```
+[ERR ] New container failed health check after 60s. Rolling back...
+```
+
+1. **Read the failed container logs:**
+
+   ```bash
+   docker compose -p sub2api logs --tail=200 sub2api
+   ```
+
+2. **`migration ... checksum mismatch` in the logs** — upstream rewrote a
+   historical migration file. Your DB is fine, just the checksum record is
+   stale:
+
+   ```bash
+   # Dry-run: show mismatched rows
+   sudo bash /opt/sub2api/deploy/fix-migration-checksums.sh
+
+   # Verify each listed file's git history is non-destructive:
+   cd /opt/sub2api && git log -p -- backend/migrations/<file>
+
+   # Apply the checksum fixes, then retry upgrade:
+   sudo bash /opt/sub2api/deploy/fix-migration-checksums.sh --apply
+   curl -sSL https://raw.githubusercontent.com/qiangweihewu/sub2api/main/deploy/install-custom.sh \
+     | sudo bash -s -- upgrade
+   ```
+
+3. **`First run detected` / `setup wizard` in logs** — container didn't pick
+   up `AUTO_SETUP=true`. Verify `/opt/sub2api/deploy/.env` contains it.
+
+4. **Container starts but `/health` never returns 200** — inspect the binary
+   directly in a disposable container on the compose network:
+
+   ```bash
+   NET=$(docker network ls --format '{{.Name}}' | grep sub2api | head -1)
+   docker run --rm --network "$NET" --env-file /opt/sub2api/deploy/.env \
+     sub2api-custom:v<version> 2>&1 | head -80
+   ```
+
+### Symptom: need to return to the previous binary
+
+```bash
+curl -sSL https://raw.githubusercontent.com/qiangweihewu/sub2api/main/deploy/install-custom.sh \
+  | sudo bash -s -- rollback
+```
+
+### Symptom: release asset is missing or broken
+
+Force the legacy source-build path as an escape hatch:
+
+```bash
+curl -sSL https://raw.githubusercontent.com/qiangweihewu/sub2api/main/deploy/install-custom.sh \
+  | sudo bash -s -- upgrade-from-source
+```
