@@ -1,5 +1,5 @@
 import { normalizeVisibleMethod } from '@/components/payment/paymentFlow'
-import { extractApiErrorCode } from '@/utils/apiError'
+import { extractApiErrorCode, extractApiErrorMetadata } from '@/utils/apiError'
 
 const DISPLAY_METHOD_ALIASES: Record<string, string> = {
   wechat: 'wxpay',
@@ -15,6 +15,13 @@ export interface PaymentScenarioContext {
 export interface PaymentScenarioErrorDescriptor {
   messageKey: string
   hintKey?: string
+  /**
+   * Raw upstream gateway error message (from metadata.upstream_error).
+   * When set, callers should display it as a supplementary hint with a
+   * "支付通道返回：" prefix so users see the real cause (e.g. "单笔限额超 2000"
+   * from easypay, "cashapp does not support cny" from Stripe).
+   */
+  upstreamError?: string
 }
 
 export function normalizePaymentMethodForDisplay(paymentType: string): string {
@@ -55,57 +62,72 @@ export function describePaymentScenarioError(
       ? error.message
       : String(error || ''))
   const normalizedMessage = message.toLowerCase()
+  const upstreamErrorRaw = extractApiErrorMetadata(error)?.upstream_error
+  const upstreamError = typeof upstreamErrorRaw === 'string' && upstreamErrorRaw.trim()
+    ? upstreamErrorRaw.trim()
+    : undefined
+  const withUpstream = (d: PaymentScenarioErrorDescriptor): PaymentScenarioErrorDescriptor =>
+    upstreamError ? { ...d, upstreamError } : d
 
   if (method === 'wxpay') {
     if (code === 'WECHAT_H5_NOT_AUTHORIZED') {
-      return {
+      return withUpstream({
         messageKey: 'payment.errors.wechatH5NotAuthorized',
         hintKey: defaultWechatHint(context),
-      }
+      })
     }
     if (code === 'WECHAT_PAYMENT_MP_NOT_CONFIGURED') {
-      return {
+      return withUpstream({
         messageKey: 'payment.errors.wechatPaymentMpNotConfigured',
         hintKey: context.isWechatBrowser
           ? 'payment.errors.wechatSwitchBrowserHint'
           : defaultWechatHint(context),
-      }
+      })
     }
     if (code === 'NO_AVAILABLE_INSTANCE') {
-      return {
+      return withUpstream({
         messageKey: 'payment.errors.wechatUnavailable',
         hintKey: defaultWechatHint(context),
-      }
+      })
     }
     if (code === 'WECHAT_JSAPI_FAILED' || normalizedMessage.includes('get_brand_wcpay_request:fail')) {
-      return {
+      return withUpstream({
         messageKey: 'payment.errors.wechatJsapiFailed',
         hintKey: defaultWechatHint(context),
-      }
+      })
     }
     if (
       normalizedMessage.includes('weixinjsbridge is unavailable') ||
       normalizedMessage.includes('wechat_jsapi_unavailable')
     ) {
-      return {
+      return withUpstream({
         messageKey: 'payment.errors.wechatJsapiUnavailable',
         hintKey: 'payment.errors.wechatOpenInWeChatHint',
-      }
+      })
     }
     if (code === 'PAYMENT_GATEWAY_ERROR' || code === 'UNHANDLED_PAYMENT_SCENARIO') {
-      return {
+      return withUpstream({
         messageKey: 'payment.errors.wechatUnavailable',
         hintKey: defaultWechatHint(context),
-      }
+      })
     }
   }
 
   if (method === 'alipay' && (code === 'PAYMENT_GATEWAY_ERROR' || code === 'UNHANDLED_PAYMENT_SCENARIO')) {
-    return {
+    return withUpstream({
       messageKey: context.isMobile
         ? 'payment.errors.alipayMobileUnavailable'
         : 'payment.errors.alipayDesktopUnavailable',
       hintKey: defaultAlipayHint(context),
+    })
+  }
+
+  // Generic gateway error for any other method (card / link / etc.): no specific i18n, just
+  // show the upstream error if we have one so the user at least sees the real cause.
+  if (code === 'PAYMENT_GATEWAY_ERROR' && upstreamError) {
+    return {
+      messageKey: 'payment.errors.genericGatewayError',
+      upstreamError,
     }
   }
 

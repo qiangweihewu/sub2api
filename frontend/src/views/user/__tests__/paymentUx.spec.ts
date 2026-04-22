@@ -67,6 +67,34 @@ describe('describePaymentScenarioError', () => {
       hintKey: 'payment.errors.alipayDesktopQrHint',
     })
   })
+
+  it('attaches upstreamError from metadata when present (existing scenario)', () => {
+    expect(describePaymentScenarioError(
+      { reason: 'PAYMENT_GATEWAY_ERROR', metadata: { upstream_error: '单笔限额超 2000', provider: 'easypay' } },
+      { paymentMethod: 'alipay', isMobile: false, isWechatBrowser: false },
+    )).toEqual({
+      messageKey: 'payment.errors.alipayDesktopUnavailable',
+      hintKey: 'payment.errors.alipayDesktopQrHint',
+      upstreamError: '单笔限额超 2000',
+    })
+  })
+
+  it('returns generic gateway descriptor with upstreamError for non-alipay/wxpay methods (e.g. card)', () => {
+    expect(describePaymentScenarioError(
+      { reason: 'PAYMENT_GATEWAY_ERROR', metadata: { upstream_error: 'cashapp does not support cny', provider: 'stripe' } },
+      { paymentMethod: 'card', isMobile: false, isWechatBrowser: false },
+    )).toEqual({
+      messageKey: 'payment.errors.genericGatewayError',
+      upstreamError: 'cashapp does not support cny',
+    })
+  })
+
+  it('returns null for generic gateway error without upstreamError on an unknown method', () => {
+    expect(describePaymentScenarioError(
+      { reason: 'PAYMENT_GATEWAY_ERROR' },
+      { paymentMethod: 'card', isMobile: false, isWechatBrowser: false },
+    )).toBeNull()
+  })
 })
 
 describe('buildPaymentErrorToastMessage', () => {
