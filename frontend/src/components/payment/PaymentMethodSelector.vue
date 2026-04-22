@@ -34,6 +34,7 @@
       </button>
     </div>
     <StripeExpressCheckout
+      :key="amountInCents"
       v-if="hasCardMethod && publishableKey && amountInCents && currency"
       :publishable-key="publishableKey"
       :amount-in-cents="amountInCents"

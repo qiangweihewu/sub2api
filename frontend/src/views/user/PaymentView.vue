@@ -146,11 +146,7 @@
                 <PaymentMethodSelector
                   :methods="subMethodOptions"
                   :selected="selectedMethod"
-                  :publishable-key="checkout.stripe_publishable_key"
-                  :amount-in-cents="expressCheckoutAmountInCents"
-                  currency="cny"
                   @select="selectedMethod = $event"
-                  @express-checkout="onExpressCheckout"
                 />
               </div>
               <div v-if="feeRate > 0 && selectedPlan.price > 0" class="card p-6">
