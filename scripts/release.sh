@@ -103,6 +103,28 @@ build_frontend() {
     print_success "Frontend built"
 }
 
+build_backend() {
+    local version_no_v="$1"
+    print_info "Building backend (linux/amd64, -tags embed)..."
+    (
+        cd "$REPO_ROOT/backend"
+        local commit date
+        commit=$(git -C "$REPO_ROOT" rev-parse --short HEAD)
+        date=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+        CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+          go build -tags embed \
+          -ldflags="-s -w -X main.Version=${version_no_v} -X main.BuildType=release -X main.Commit=${commit} -X main.Date=${date}" \
+          -trimpath \
+          -o "$REPO_ROOT/dist/server" \
+          ./cmd/server
+    )
+    if [ ! -f "$REPO_ROOT/dist/server" ]; then
+        print_error "Backend build did not produce dist/server"
+        exit 1
+    fi
+    print_success "Backend built: $(du -h "$REPO_ROOT/dist/server" | awk '{print $1}')"
+}
+
 main() {
     local version
     version=$(resolve_version "${1:-}")
@@ -112,7 +134,8 @@ main() {
     print_info "Releasing version: $version"
     clean_dist
     build_frontend
-    print_success "Frontend stage done — stopping here for this step"
+    build_backend "${version#v}"
+    print_success "Backend stage done — stopping here for this step"
 }
 
 # Only run main if executed directly (allows sourcing for tests)
