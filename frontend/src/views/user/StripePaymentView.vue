@@ -160,8 +160,16 @@ onMounted(async () => {
       await confirmAlipay(stripe, clientSecret, orderId)
     } else if (method === 'wechat_pay') {
       await confirmWechatPay(stripe, clientSecret)
+    } else if (method === 'card') {
+      // Card path: PaymentElement focused on card only. Wallets (Apple Pay,
+      // Google Pay) still appear via automatic_payment_methods if the browser
+      // supports them and the Stripe dashboard has them activated.
+      showPaymentElement.value = true
+      await nextTick()
+      mountPaymentElement(stripe, clientSecret, 'card')
     } else {
-      // Fallback: render full Payment Element
+      // Fallback for unknown methods: render the generic Payment Element
+      // with the full method order.
       showPaymentElement.value = true
       await nextTick()
       mountPaymentElement(stripe, clientSecret)
@@ -214,7 +222,7 @@ async function confirmWechatPay(stripe: Stripe, clientSecret: string) {
   }
 }
 
-function mountPaymentElement(stripe: Stripe, clientSecret: string) {
+function mountPaymentElement(stripe: Stripe, clientSecret: string, preferredMethod?: 'card') {
   const isDark = document.documentElement.classList.contains('dark')
   const elements = stripe.elements({
     clientSecret,
@@ -223,7 +231,9 @@ function mountPaymentElement(stripe: Stripe, clientSecret: string) {
   elementsInstance = elements
   const paymentElement = elements.create('payment', {
     layout: 'tabs',
-    paymentMethodOrder: ['alipay', 'wechat_pay', 'card', 'link'],
+    paymentMethodOrder: preferredMethod === 'card'
+      ? ['card']
+      : ['alipay', 'wechat_pay', 'card', 'link'],
   } as Record<string, unknown>)
   paymentElement.mount('#stripe-payment-element')
   paymentElement.on('ready', () => { stripeReady.value = true })
