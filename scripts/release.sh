@@ -80,13 +80,37 @@ check_deps() {
     fi
 }
 
+# -----------------------------------------------------------------------------
+# Build steps
+# -----------------------------------------------------------------------------
+clean_dist() {
+    rm -rf "$REPO_ROOT/dist"
+    mkdir -p "$REPO_ROOT/dist"
+}
+
+build_frontend() {
+    print_info "Building frontend (vite build)..."
+    cd "$REPO_ROOT/frontend"
+    pnpm install --frozen-lockfile
+    pnpm run build
+    # Output goes to $REPO_ROOT/backend/internal/web/dist per vite.config.ts
+    if [ ! -f "$REPO_ROOT/backend/internal/web/dist/index.html" ]; then
+        print_error "Frontend build did not produce backend/internal/web/dist/index.html"
+        exit 1
+    fi
+    print_success "Frontend built"
+}
+
 main() {
     local version
     version=$(resolve_version "${1:-}")
     validate_version "$version"
     check_deps
     check_tag_unused "$version"
-    print_info "Pre-flight OK. Version: $version"
+    print_info "Releasing version: $version"
+    clean_dist
+    build_frontend
+    print_success "Frontend stage done — stopping here for this step"
 }
 
 # Only run main if executed directly (allows sourcing for tests)
