@@ -326,6 +326,48 @@ do_upgrade() {
 }
 
 # =============================================================================
+# Rollback (swap to the previous image tag)
+# =============================================================================
+do_rollback() {
+    if ! docker image inspect "${IMAGE_NAME}:previous" >/dev/null 2>&1; then
+        print_error "No ${IMAGE_NAME}:previous image found. Cannot rollback."
+        print_info "To install a specific prior version, run:"
+        print_info "  VERSION=vX.Y.Z curl -sSL <install-custom-url> | sudo -E bash -s -- upgrade"
+        exit 1
+    fi
+
+    local failed_tag
+    failed_tag="${IMAGE_NAME}:failed-$(date +%Y%m%d-%H%M%S)"
+    print_info "Archiving current ${IMAGE_NAME}:latest as $failed_tag ..."
+    docker tag "${IMAGE_NAME}:latest" "$failed_tag" 2>/dev/null || true
+
+    print_info "Swapping ${IMAGE_NAME}:previous → ${IMAGE_NAME}:latest ..."
+    docker tag "${IMAGE_NAME}:previous" "${IMAGE_NAME}:latest"
+
+    cd "$INSTALL_DIR/deploy"
+    print_info "Restarting sub2api container..."
+    docker compose -p "$COMPOSE_PROJECT" up -d sub2api
+
+    print_info "Waiting for health check (max 60s)..."
+    local retries=0
+    while [ $retries -lt 30 ]; do
+        local status
+        status=$(docker inspect --format '{{.State.Health.Status}}' sub2api 2>/dev/null || echo "starting")
+        if [ "$status" = "healthy" ]; then
+            print_success "Rollback succeeded. Current version:"
+            docker inspect --format '  {{ index .Config.Labels "sub2api.version" }}' sub2api 2>/dev/null || echo "  (no label)"
+            return 0
+        fi
+        sleep 2
+        retries=$((retries + 1))
+    done
+
+    print_error "Rollback container failed health check after 60s."
+    print_error "Check logs: docker compose -p ${COMPOSE_PROJECT} logs sub2api"
+    exit 1
+}
+
+# =============================================================================
 # Uninstall
 # =============================================================================
 do_uninstall() {
