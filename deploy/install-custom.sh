@@ -368,6 +368,56 @@ do_rollback() {
 }
 
 # =============================================================================
+# Fast Upgrade (pull prebuilt binary from GitHub Release, skip source build)
+# =============================================================================
+
+# Configurable via environment:
+#   VERSION=vX.Y.Z            # target version (default: latest release)
+#   FORCE=1                   # re-upgrade even if already on target version
+#   NO_RELEASE_FALLBACK=1     # fail instead of falling back to source build
+
+_upgrade_fast_preflight() {
+    # jq for GitHub API parsing
+    if ! command -v jq >/dev/null 2>&1; then
+        print_info "Installing jq (required for upgrade)..."
+        apt-get update -qq && apt-get install -y -qq jq 2>/dev/null \
+            || yum install -y jq 2>/dev/null \
+            || { print_error "Failed to install jq. Install it manually and retry."; exit 1; }
+    fi
+
+    # Architecture check
+    local arch
+    arch=$(uname -m)
+    if [ "$arch" != "x86_64" ]; then
+        print_warning "Architecture $arch is not supported by prebuilt releases (only x86_64/amd64)."
+        print_info "Falling back to source build..."
+        do_upgrade
+        exit $?
+    fi
+
+    # Disk check: need at least 1GB free in /tmp and /var/lib/docker
+    local free_tmp free_docker
+    free_tmp=$(df -Pm /tmp 2>/dev/null | awk 'NR==2 {print $4}')
+    free_docker=$(df -Pm /var/lib/docker 2>/dev/null | awk 'NR==2 {print $4}')
+    if [ "${free_tmp:-0}" -lt 1024 ] || [ "${free_docker:-0}" -lt 1024 ]; then
+        print_error "Insufficient disk space. Need >1GB free in /tmp and /var/lib/docker."
+        print_error "  /tmp free: ${free_tmp:-?}MB, /var/lib/docker free: ${free_docker:-?}MB"
+        exit 1
+    fi
+
+    # Docker must be available (should be, since install ran before upgrade)
+    if ! command -v docker >/dev/null 2>&1; then
+        print_error "Docker not installed. Run the full installer first (no args)."
+        exit 1
+    fi
+}
+
+do_upgrade_fast() {
+    _upgrade_fast_preflight
+    print_info "do_upgrade_fast: pre-flight OK (skeleton, logic coming in later tasks)"
+}
+
+# =============================================================================
 # Uninstall
 # =============================================================================
 do_uninstall() {
