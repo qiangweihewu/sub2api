@@ -385,6 +385,18 @@ _upgrade_fast_preflight() {
             || { print_error "Failed to install jq. Install it manually and retry."; exit 1; }
     fi
 
+    # Docker must be available (checked before docker-dir disk checks)
+    if ! command -v docker >/dev/null 2>&1; then
+        print_error "Docker not installed. Run the full installer first (no args)."
+        exit 1
+    fi
+
+    # Installation must exist (source-build fallback needs the git tree)
+    if [ ! -d "$INSTALL_DIR/.git" ]; then
+        print_error "Sub2API not installed. Run the full installer first (no args)."
+        exit 1
+    fi
+
     # Architecture check
     local arch
     arch=$(uname -m)
@@ -402,12 +414,6 @@ _upgrade_fast_preflight() {
     if [ "${free_tmp:-0}" -lt 1024 ] || [ "${free_docker:-0}" -lt 1024 ]; then
         print_error "Insufficient disk space. Need >1GB free in /tmp and /var/lib/docker."
         print_error "  /tmp free: ${free_tmp:-?}MB, /var/lib/docker free: ${free_docker:-?}MB"
-        exit 1
-    fi
-
-    # Docker must be available (should be, since install ran before upgrade)
-    if ! command -v docker >/dev/null 2>&1; then
-        print_error "Docker not installed. Run the full installer first (no args)."
         exit 1
     fi
 }
