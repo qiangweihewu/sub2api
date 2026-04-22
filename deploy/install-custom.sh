@@ -467,10 +467,78 @@ _upgrade_fast_resolve_versions() {
     fi
 }
 
+# Consumes: TARGET_VERSION
+# Produces via globals: STAGE_DIR (contains 'server' + 'Dockerfile')
+# Falls back to do_upgrade on download failure (unless NO_RELEASE_FALLBACK=1).
+# Aborts on checksum failure (does NOT fall back — signals tampering or corruption).
+_upgrade_fast_download() {
+    STAGE_DIR=$(mktemp -d -t sub2api-upgrade-XXXXXX)
+    local asset="sub2api-linux-amd64.tar.gz"
+    local base_url="https://github.com/${GITHUB_REPO}/releases/download/${TARGET_VERSION}"
+    local tarball_url="${base_url}/${asset}"
+    local checksums_url="${base_url}/checksums.txt"
+
+    print_info "Downloading $asset ..."
+    local attempt=0
+    while [ $attempt -lt 3 ]; do
+        if curl -fsSL --max-time 300 -o "$STAGE_DIR/$asset" "$tarball_url" \
+           && curl -fsSL --max-time 60 -o "$STAGE_DIR/checksums.txt" "$checksums_url"; then
+            break
+        fi
+        attempt=$((attempt + 1))
+        if [ $attempt -lt 3 ]; then
+            print_warning "Download failed (attempt $attempt/3), retrying in 5s..."
+            sleep 5
+        fi
+    done
+
+    if [ ! -s "$STAGE_DIR/$asset" ] || [ ! -s "$STAGE_DIR/checksums.txt" ]; then
+        rm -rf "$STAGE_DIR"
+        print_warning "Failed to download release assets after 3 attempts."
+        if [ "${NO_RELEASE_FALLBACK:-0}" = "1" ]; then
+            print_error "NO_RELEASE_FALLBACK=1 set; not falling back."
+            exit 1
+        fi
+        print_info "Falling back to source build..."
+        do_upgrade
+        exit $?
+    fi
+
+    print_info "Verifying sha256..."
+    (cd "$STAGE_DIR" && grep "  ${asset}$" checksums.txt | sha256sum -c -) || {
+        rm -rf "$STAGE_DIR"
+        print_error "Checksum verification failed. Possible tampering or corruption."
+        print_error "Not falling back — please investigate."
+        exit 1
+    }
+    print_success "Checksum OK"
+
+    print_info "Extracting binary..."
+    tar -xzf "$STAGE_DIR/$asset" -C "$STAGE_DIR"
+    if [ ! -x "$STAGE_DIR/server" ]; then
+        rm -rf "$STAGE_DIR"
+        print_error "Extracted tarball did not contain executable 'server'."
+        exit 1
+    fi
+
+    # Stage the runtime Dockerfile alongside the binary
+    if [ ! -f "$INSTALL_DIR/deploy/Dockerfile.runtime" ]; then
+        rm -rf "$STAGE_DIR"
+        print_error "$INSTALL_DIR/deploy/Dockerfile.runtime not found. Ensure code is up to date:"
+        print_error "  cd $INSTALL_DIR && git pull origin main"
+        exit 1
+    fi
+    cp "$INSTALL_DIR/deploy/Dockerfile.runtime" "$STAGE_DIR/Dockerfile"
+
+    print_success "Staged at $STAGE_DIR"
+}
+
 do_upgrade_fast() {
     _upgrade_fast_preflight
     _upgrade_fast_resolve_versions
-    print_info "Version resolution OK (skeleton continues in next tasks)"
+    _upgrade_fast_download
+    print_info "Download + verify OK (skeleton continues in next tasks)"
+    print_info "Staged at: $STAGE_DIR"
 }
 
 # =============================================================================
