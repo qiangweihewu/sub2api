@@ -265,3 +265,36 @@ func (s *statsAuthUserRepo) EnableTotp(context.Context, int64) error {
 func (s *statsAuthUserRepo) DisableTotp(context.Context, int64) error {
 	panic("unexpected DisableTotp call")
 }
+
+func (s *statsAuthUserRepo) GetUserAvatar(context.Context, int64) (*service.UserAvatar, error) {
+	// Auth middleware hydrates avatars on GetByID; return "no avatar" rather than panic.
+	return nil, nil
+}
+
+func (s *statsAuthUserRepo) UpsertUserAvatar(context.Context, int64, service.UpsertUserAvatarInput) (*service.UserAvatar, error) {
+	panic("unexpected UpsertUserAvatar call")
+}
+
+func (s *statsAuthUserRepo) DeleteUserAvatar(context.Context, int64) error {
+	panic("unexpected DeleteUserAvatar call")
+}
+
+func (s *statsAuthUserRepo) GetLatestUsedAtByUserIDs(context.Context, []int64) (map[int64]*time.Time, error) {
+	panic("unexpected GetLatestUsedAtByUserIDs call")
+}
+
+func (s *statsAuthUserRepo) GetLatestUsedAtByUserID(context.Context, int64) (*time.Time, error) {
+	panic("unexpected GetLatestUsedAtByUserID call")
+}
+
+func (s *statsAuthUserRepo) UpdateUserLastActiveAt(context.Context, int64, time.Time) error {
+	panic("unexpected UpdateUserLastActiveAt call")
+}
+
+func (s *statsAuthUserRepo) ListUserAuthIdentities(context.Context, int64) ([]service.UserAuthIdentityRecord, error) {
+	panic("unexpected ListUserAuthIdentities call")
+}
+
+func (s *statsAuthUserRepo) UnbindUserAuthProvider(context.Context, int64, string) error {
+	panic("unexpected UnbindUserAuthProvider call")
+}
