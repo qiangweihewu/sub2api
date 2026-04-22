@@ -65,6 +65,10 @@ const (
 	FieldTempUnschedulableUntil = "temp_unschedulable_until"
 	// FieldTempUnschedulableReason holds the string denoting the temp_unschedulable_reason field in the database.
 	FieldTempUnschedulableReason = "temp_unschedulable_reason"
+	// FieldTempUnschedStepIndex holds the string denoting the temp_unsched_step_index field in the database.
+	FieldTempUnschedStepIndex = "temp_unsched_step_index"
+	// FieldTempUnschedLastRecoveredAt holds the string denoting the temp_unsched_last_recovered_at field in the database.
+	FieldTempUnschedLastRecoveredAt = "temp_unsched_last_recovered_at"
 	// FieldSessionWindowStart holds the string denoting the session_window_start field in the database.
 	FieldSessionWindowStart = "session_window_start"
 	// FieldSessionWindowEnd holds the string denoting the session_window_end field in the database.
@@ -137,6 +141,8 @@ var Columns = []string{
 	FieldOverloadUntil,
 	FieldTempUnschedulableUntil,
 	FieldTempUnschedulableReason,
+	FieldTempUnschedStepIndex,
+	FieldTempUnschedLastRecoveredAt,
 	FieldSessionWindowStart,
 	FieldSessionWindowEnd,
 	FieldSessionWindowStatus,
@@ -321,6 +327,16 @@ func ByTempUnschedulableUntil(opts ...sql.OrderTermOption) OrderOption {
 // ByTempUnschedulableReason orders the results by the temp_unschedulable_reason field.
 func ByTempUnschedulableReason(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldTempUnschedulableReason, opts...).ToFunc()
+}
+
+// ByTempUnschedStepIndex orders the results by the temp_unsched_step_index field.
+func ByTempUnschedStepIndex(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTempUnschedStepIndex, opts...).ToFunc()
+}
+
+// ByTempUnschedLastRecoveredAt orders the results by the temp_unsched_last_recovered_at field.
+func ByTempUnschedLastRecoveredAt(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldTempUnschedLastRecoveredAt, opts...).ToFunc()
 }
 
 // BySessionWindowStart orders the results by the session_window_start field.

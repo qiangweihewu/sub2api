@@ -146,6 +146,15 @@ func (m *sessionWindowMockRepo) SetOverloaded(context.Context, int64, time.Time)
 func (m *sessionWindowMockRepo) SetTempUnschedulable(context.Context, int64, time.Time, string) error {
 	panic("unexpected")
 }
+func (m *sessionWindowMockRepo) SetTempUnschedulableWithStep(context.Context, int64, time.Time, string, int) error {
+	panic("unexpected")
+}
+func (m *sessionWindowMockRepo) StampTempUnschedRecovered(context.Context, int64, time.Time) error {
+	panic("unexpected")
+}
+func (m *sessionWindowMockRepo) ClearTempUnschedulableStreak(context.Context, int64) error {
+	panic("unexpected")
+}
 func (m *sessionWindowMockRepo) BulkUpdate(context.Context, []int64, AccountBulkUpdate) (int64, error) {
 	panic("unexpected")
 }

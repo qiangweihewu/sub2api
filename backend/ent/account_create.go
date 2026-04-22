@@ -335,6 +335,34 @@ func (_c *AccountCreate) SetNillableTempUnschedulableReason(v *string) *AccountC
 	return _c
 }
 
+// SetTempUnschedStepIndex sets the "temp_unsched_step_index" field.
+func (_c *AccountCreate) SetTempUnschedStepIndex(v int) *AccountCreate {
+	_c.mutation.SetTempUnschedStepIndex(v)
+	return _c
+}
+
+// SetNillableTempUnschedStepIndex sets the "temp_unsched_step_index" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableTempUnschedStepIndex(v *int) *AccountCreate {
+	if v != nil {
+		_c.SetTempUnschedStepIndex(*v)
+	}
+	return _c
+}
+
+// SetTempUnschedLastRecoveredAt sets the "temp_unsched_last_recovered_at" field.
+func (_c *AccountCreate) SetTempUnschedLastRecoveredAt(v time.Time) *AccountCreate {
+	_c.mutation.SetTempUnschedLastRecoveredAt(v)
+	return _c
+}
+
+// SetNillableTempUnschedLastRecoveredAt sets the "temp_unsched_last_recovered_at" field if the given value is not nil.
+func (_c *AccountCreate) SetNillableTempUnschedLastRecoveredAt(v *time.Time) *AccountCreate {
+	if v != nil {
+		_c.SetTempUnschedLastRecoveredAt(*v)
+	}
+	return _c
+}
+
 // SetSessionWindowStart sets the "session_window_start" field.
 func (_c *AccountCreate) SetSessionWindowStart(v time.Time) *AccountCreate {
 	_c.mutation.SetSessionWindowStart(v)
@@ -692,6 +720,14 @@ func (_c *AccountCreate) createSpec() (*Account, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.TempUnschedulableReason(); ok {
 		_spec.SetField(account.FieldTempUnschedulableReason, field.TypeString, value)
 		_node.TempUnschedulableReason = &value
+	}
+	if value, ok := _c.mutation.TempUnschedStepIndex(); ok {
+		_spec.SetField(account.FieldTempUnschedStepIndex, field.TypeInt, value)
+		_node.TempUnschedStepIndex = &value
+	}
+	if value, ok := _c.mutation.TempUnschedLastRecoveredAt(); ok {
+		_spec.SetField(account.FieldTempUnschedLastRecoveredAt, field.TypeTime, value)
+		_node.TempUnschedLastRecoveredAt = &value
 	}
 	if value, ok := _c.mutation.SessionWindowStart(); ok {
 		_spec.SetField(account.FieldSessionWindowStart, field.TypeTime, value)
@@ -1191,6 +1227,48 @@ func (u *AccountUpsert) UpdateTempUnschedulableReason() *AccountUpsert {
 // ClearTempUnschedulableReason clears the value of the "temp_unschedulable_reason" field.
 func (u *AccountUpsert) ClearTempUnschedulableReason() *AccountUpsert {
 	u.SetNull(account.FieldTempUnschedulableReason)
+	return u
+}
+
+// SetTempUnschedStepIndex sets the "temp_unsched_step_index" field.
+func (u *AccountUpsert) SetTempUnschedStepIndex(v int) *AccountUpsert {
+	u.Set(account.FieldTempUnschedStepIndex, v)
+	return u
+}
+
+// UpdateTempUnschedStepIndex sets the "temp_unsched_step_index" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateTempUnschedStepIndex() *AccountUpsert {
+	u.SetExcluded(account.FieldTempUnschedStepIndex)
+	return u
+}
+
+// AddTempUnschedStepIndex adds v to the "temp_unsched_step_index" field.
+func (u *AccountUpsert) AddTempUnschedStepIndex(v int) *AccountUpsert {
+	u.Add(account.FieldTempUnschedStepIndex, v)
+	return u
+}
+
+// ClearTempUnschedStepIndex clears the value of the "temp_unsched_step_index" field.
+func (u *AccountUpsert) ClearTempUnschedStepIndex() *AccountUpsert {
+	u.SetNull(account.FieldTempUnschedStepIndex)
+	return u
+}
+
+// SetTempUnschedLastRecoveredAt sets the "temp_unsched_last_recovered_at" field.
+func (u *AccountUpsert) SetTempUnschedLastRecoveredAt(v time.Time) *AccountUpsert {
+	u.Set(account.FieldTempUnschedLastRecoveredAt, v)
+	return u
+}
+
+// UpdateTempUnschedLastRecoveredAt sets the "temp_unsched_last_recovered_at" field to the value that was provided on create.
+func (u *AccountUpsert) UpdateTempUnschedLastRecoveredAt() *AccountUpsert {
+	u.SetExcluded(account.FieldTempUnschedLastRecoveredAt)
+	return u
+}
+
+// ClearTempUnschedLastRecoveredAt clears the value of the "temp_unsched_last_recovered_at" field.
+func (u *AccountUpsert) ClearTempUnschedLastRecoveredAt() *AccountUpsert {
+	u.SetNull(account.FieldTempUnschedLastRecoveredAt)
 	return u
 }
 
@@ -1738,6 +1816,55 @@ func (u *AccountUpsertOne) UpdateTempUnschedulableReason() *AccountUpsertOne {
 func (u *AccountUpsertOne) ClearTempUnschedulableReason() *AccountUpsertOne {
 	return u.Update(func(s *AccountUpsert) {
 		s.ClearTempUnschedulableReason()
+	})
+}
+
+// SetTempUnschedStepIndex sets the "temp_unsched_step_index" field.
+func (u *AccountUpsertOne) SetTempUnschedStepIndex(v int) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetTempUnschedStepIndex(v)
+	})
+}
+
+// AddTempUnschedStepIndex adds v to the "temp_unsched_step_index" field.
+func (u *AccountUpsertOne) AddTempUnschedStepIndex(v int) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddTempUnschedStepIndex(v)
+	})
+}
+
+// UpdateTempUnschedStepIndex sets the "temp_unsched_step_index" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateTempUnschedStepIndex() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateTempUnschedStepIndex()
+	})
+}
+
+// ClearTempUnschedStepIndex clears the value of the "temp_unsched_step_index" field.
+func (u *AccountUpsertOne) ClearTempUnschedStepIndex() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearTempUnschedStepIndex()
+	})
+}
+
+// SetTempUnschedLastRecoveredAt sets the "temp_unsched_last_recovered_at" field.
+func (u *AccountUpsertOne) SetTempUnschedLastRecoveredAt(v time.Time) *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetTempUnschedLastRecoveredAt(v)
+	})
+}
+
+// UpdateTempUnschedLastRecoveredAt sets the "temp_unsched_last_recovered_at" field to the value that was provided on create.
+func (u *AccountUpsertOne) UpdateTempUnschedLastRecoveredAt() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateTempUnschedLastRecoveredAt()
+	})
+}
+
+// ClearTempUnschedLastRecoveredAt clears the value of the "temp_unsched_last_recovered_at" field.
+func (u *AccountUpsertOne) ClearTempUnschedLastRecoveredAt() *AccountUpsertOne {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearTempUnschedLastRecoveredAt()
 	})
 }
 
@@ -2460,6 +2587,55 @@ func (u *AccountUpsertBulk) UpdateTempUnschedulableReason() *AccountUpsertBulk {
 func (u *AccountUpsertBulk) ClearTempUnschedulableReason() *AccountUpsertBulk {
 	return u.Update(func(s *AccountUpsert) {
 		s.ClearTempUnschedulableReason()
+	})
+}
+
+// SetTempUnschedStepIndex sets the "temp_unsched_step_index" field.
+func (u *AccountUpsertBulk) SetTempUnschedStepIndex(v int) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetTempUnschedStepIndex(v)
+	})
+}
+
+// AddTempUnschedStepIndex adds v to the "temp_unsched_step_index" field.
+func (u *AccountUpsertBulk) AddTempUnschedStepIndex(v int) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.AddTempUnschedStepIndex(v)
+	})
+}
+
+// UpdateTempUnschedStepIndex sets the "temp_unsched_step_index" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateTempUnschedStepIndex() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateTempUnschedStepIndex()
+	})
+}
+
+// ClearTempUnschedStepIndex clears the value of the "temp_unsched_step_index" field.
+func (u *AccountUpsertBulk) ClearTempUnschedStepIndex() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearTempUnschedStepIndex()
+	})
+}
+
+// SetTempUnschedLastRecoveredAt sets the "temp_unsched_last_recovered_at" field.
+func (u *AccountUpsertBulk) SetTempUnschedLastRecoveredAt(v time.Time) *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.SetTempUnschedLastRecoveredAt(v)
+	})
+}
+
+// UpdateTempUnschedLastRecoveredAt sets the "temp_unsched_last_recovered_at" field to the value that was provided on create.
+func (u *AccountUpsertBulk) UpdateTempUnschedLastRecoveredAt() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.UpdateTempUnschedLastRecoveredAt()
+	})
+}
+
+// ClearTempUnschedLastRecoveredAt clears the value of the "temp_unsched_last_recovered_at" field.
+func (u *AccountUpsertBulk) ClearTempUnschedLastRecoveredAt() *AccountUpsertBulk {
+	return u.Update(func(s *AccountUpsert) {
+		s.ClearTempUnschedLastRecoveredAt()
 	})
 }
 

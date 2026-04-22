@@ -2264,52 +2264,55 @@ func (m *APIKeyMutation) ResetEdge(name string) error {
 // AccountMutation represents an operation that mutates the Account nodes in the graph.
 type AccountMutation struct {
 	config
-	op                        Op
-	typ                       string
-	id                        *int64
-	created_at                *time.Time
-	updated_at                *time.Time
-	deleted_at                *time.Time
-	name                      *string
-	notes                     *string
-	platform                  *string
-	_type                     *string
-	credentials               *map[string]interface{}
-	extra                     *map[string]interface{}
-	concurrency               *int
-	addconcurrency            *int
-	load_factor               *int
-	addload_factor            *int
-	priority                  *int
-	addpriority               *int
-	rate_multiplier           *float64
-	addrate_multiplier        *float64
-	status                    *string
-	error_message             *string
-	last_used_at              *time.Time
-	expires_at                *time.Time
-	auto_pause_on_expired     *bool
-	schedulable               *bool
-	rate_limited_at           *time.Time
-	rate_limit_reset_at       *time.Time
-	overload_until            *time.Time
-	temp_unschedulable_until  *time.Time
-	temp_unschedulable_reason *string
-	session_window_start      *time.Time
-	session_window_end        *time.Time
-	session_window_status     *string
-	clearedFields             map[string]struct{}
-	groups                    map[int64]struct{}
-	removedgroups             map[int64]struct{}
-	clearedgroups             bool
-	proxy                     *int64
-	clearedproxy              bool
-	usage_logs                map[int64]struct{}
-	removedusage_logs         map[int64]struct{}
-	clearedusage_logs         bool
-	done                      bool
-	oldValue                  func(context.Context) (*Account, error)
-	predicates                []predicate.Account
+	op                             Op
+	typ                            string
+	id                             *int64
+	created_at                     *time.Time
+	updated_at                     *time.Time
+	deleted_at                     *time.Time
+	name                           *string
+	notes                          *string
+	platform                       *string
+	_type                          *string
+	credentials                    *map[string]interface{}
+	extra                          *map[string]interface{}
+	concurrency                    *int
+	addconcurrency                 *int
+	load_factor                    *int
+	addload_factor                 *int
+	priority                       *int
+	addpriority                    *int
+	rate_multiplier                *float64
+	addrate_multiplier             *float64
+	status                         *string
+	error_message                  *string
+	last_used_at                   *time.Time
+	expires_at                     *time.Time
+	auto_pause_on_expired          *bool
+	schedulable                    *bool
+	rate_limited_at                *time.Time
+	rate_limit_reset_at            *time.Time
+	overload_until                 *time.Time
+	temp_unschedulable_until       *time.Time
+	temp_unschedulable_reason      *string
+	temp_unsched_step_index        *int
+	addtemp_unsched_step_index     *int
+	temp_unsched_last_recovered_at *time.Time
+	session_window_start           *time.Time
+	session_window_end             *time.Time
+	session_window_status          *string
+	clearedFields                  map[string]struct{}
+	groups                         map[int64]struct{}
+	removedgroups                  map[int64]struct{}
+	clearedgroups                  bool
+	proxy                          *int64
+	clearedproxy                   bool
+	usage_logs                     map[int64]struct{}
+	removedusage_logs              map[int64]struct{}
+	clearedusage_logs              bool
+	done                           bool
+	oldValue                       func(context.Context) (*Account, error)
+	predicates                     []predicate.Account
 }
 
 var _ ent.Mutation = (*AccountMutation)(nil)
@@ -3547,6 +3550,125 @@ func (m *AccountMutation) ResetTempUnschedulableReason() {
 	delete(m.clearedFields, account.FieldTempUnschedulableReason)
 }
 
+// SetTempUnschedStepIndex sets the "temp_unsched_step_index" field.
+func (m *AccountMutation) SetTempUnschedStepIndex(i int) {
+	m.temp_unsched_step_index = &i
+	m.addtemp_unsched_step_index = nil
+}
+
+// TempUnschedStepIndex returns the value of the "temp_unsched_step_index" field in the mutation.
+func (m *AccountMutation) TempUnschedStepIndex() (r int, exists bool) {
+	v := m.temp_unsched_step_index
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTempUnschedStepIndex returns the old "temp_unsched_step_index" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldTempUnschedStepIndex(ctx context.Context) (v *int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTempUnschedStepIndex is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTempUnschedStepIndex requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTempUnschedStepIndex: %w", err)
+	}
+	return oldValue.TempUnschedStepIndex, nil
+}
+
+// AddTempUnschedStepIndex adds i to the "temp_unsched_step_index" field.
+func (m *AccountMutation) AddTempUnschedStepIndex(i int) {
+	if m.addtemp_unsched_step_index != nil {
+		*m.addtemp_unsched_step_index += i
+	} else {
+		m.addtemp_unsched_step_index = &i
+	}
+}
+
+// AddedTempUnschedStepIndex returns the value that was added to the "temp_unsched_step_index" field in this mutation.
+func (m *AccountMutation) AddedTempUnschedStepIndex() (r int, exists bool) {
+	v := m.addtemp_unsched_step_index
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ClearTempUnschedStepIndex clears the value of the "temp_unsched_step_index" field.
+func (m *AccountMutation) ClearTempUnschedStepIndex() {
+	m.temp_unsched_step_index = nil
+	m.addtemp_unsched_step_index = nil
+	m.clearedFields[account.FieldTempUnschedStepIndex] = struct{}{}
+}
+
+// TempUnschedStepIndexCleared returns if the "temp_unsched_step_index" field was cleared in this mutation.
+func (m *AccountMutation) TempUnschedStepIndexCleared() bool {
+	_, ok := m.clearedFields[account.FieldTempUnschedStepIndex]
+	return ok
+}
+
+// ResetTempUnschedStepIndex resets all changes to the "temp_unsched_step_index" field.
+func (m *AccountMutation) ResetTempUnschedStepIndex() {
+	m.temp_unsched_step_index = nil
+	m.addtemp_unsched_step_index = nil
+	delete(m.clearedFields, account.FieldTempUnschedStepIndex)
+}
+
+// SetTempUnschedLastRecoveredAt sets the "temp_unsched_last_recovered_at" field.
+func (m *AccountMutation) SetTempUnschedLastRecoveredAt(t time.Time) {
+	m.temp_unsched_last_recovered_at = &t
+}
+
+// TempUnschedLastRecoveredAt returns the value of the "temp_unsched_last_recovered_at" field in the mutation.
+func (m *AccountMutation) TempUnschedLastRecoveredAt() (r time.Time, exists bool) {
+	v := m.temp_unsched_last_recovered_at
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldTempUnschedLastRecoveredAt returns the old "temp_unsched_last_recovered_at" field's value of the Account entity.
+// If the Account object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *AccountMutation) OldTempUnschedLastRecoveredAt(ctx context.Context) (v *time.Time, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldTempUnschedLastRecoveredAt is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldTempUnschedLastRecoveredAt requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldTempUnschedLastRecoveredAt: %w", err)
+	}
+	return oldValue.TempUnschedLastRecoveredAt, nil
+}
+
+// ClearTempUnschedLastRecoveredAt clears the value of the "temp_unsched_last_recovered_at" field.
+func (m *AccountMutation) ClearTempUnschedLastRecoveredAt() {
+	m.temp_unsched_last_recovered_at = nil
+	m.clearedFields[account.FieldTempUnschedLastRecoveredAt] = struct{}{}
+}
+
+// TempUnschedLastRecoveredAtCleared returns if the "temp_unsched_last_recovered_at" field was cleared in this mutation.
+func (m *AccountMutation) TempUnschedLastRecoveredAtCleared() bool {
+	_, ok := m.clearedFields[account.FieldTempUnschedLastRecoveredAt]
+	return ok
+}
+
+// ResetTempUnschedLastRecoveredAt resets all changes to the "temp_unsched_last_recovered_at" field.
+func (m *AccountMutation) ResetTempUnschedLastRecoveredAt() {
+	m.temp_unsched_last_recovered_at = nil
+	delete(m.clearedFields, account.FieldTempUnschedLastRecoveredAt)
+}
+
 // SetSessionWindowStart sets the "session_window_start" field.
 func (m *AccountMutation) SetSessionWindowStart(t time.Time) {
 	m.session_window_start = &t
@@ -3863,7 +3985,7 @@ func (m *AccountMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *AccountMutation) Fields() []string {
-	fields := make([]string, 0, 28)
+	fields := make([]string, 0, 30)
 	if m.created_at != nil {
 		fields = append(fields, account.FieldCreatedAt)
 	}
@@ -3939,6 +4061,12 @@ func (m *AccountMutation) Fields() []string {
 	if m.temp_unschedulable_reason != nil {
 		fields = append(fields, account.FieldTempUnschedulableReason)
 	}
+	if m.temp_unsched_step_index != nil {
+		fields = append(fields, account.FieldTempUnschedStepIndex)
+	}
+	if m.temp_unsched_last_recovered_at != nil {
+		fields = append(fields, account.FieldTempUnschedLastRecoveredAt)
+	}
 	if m.session_window_start != nil {
 		fields = append(fields, account.FieldSessionWindowStart)
 	}
@@ -4006,6 +4134,10 @@ func (m *AccountMutation) Field(name string) (ent.Value, bool) {
 		return m.TempUnschedulableUntil()
 	case account.FieldTempUnschedulableReason:
 		return m.TempUnschedulableReason()
+	case account.FieldTempUnschedStepIndex:
+		return m.TempUnschedStepIndex()
+	case account.FieldTempUnschedLastRecoveredAt:
+		return m.TempUnschedLastRecoveredAt()
 	case account.FieldSessionWindowStart:
 		return m.SessionWindowStart()
 	case account.FieldSessionWindowEnd:
@@ -4071,6 +4203,10 @@ func (m *AccountMutation) OldField(ctx context.Context, name string) (ent.Value,
 		return m.OldTempUnschedulableUntil(ctx)
 	case account.FieldTempUnschedulableReason:
 		return m.OldTempUnschedulableReason(ctx)
+	case account.FieldTempUnschedStepIndex:
+		return m.OldTempUnschedStepIndex(ctx)
+	case account.FieldTempUnschedLastRecoveredAt:
+		return m.OldTempUnschedLastRecoveredAt(ctx)
 	case account.FieldSessionWindowStart:
 		return m.OldSessionWindowStart(ctx)
 	case account.FieldSessionWindowEnd:
@@ -4261,6 +4397,20 @@ func (m *AccountMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetTempUnschedulableReason(v)
 		return nil
+	case account.FieldTempUnschedStepIndex:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTempUnschedStepIndex(v)
+		return nil
+	case account.FieldTempUnschedLastRecoveredAt:
+		v, ok := value.(time.Time)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetTempUnschedLastRecoveredAt(v)
+		return nil
 	case account.FieldSessionWindowStart:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -4302,6 +4452,9 @@ func (m *AccountMutation) AddedFields() []string {
 	if m.addrate_multiplier != nil {
 		fields = append(fields, account.FieldRateMultiplier)
 	}
+	if m.addtemp_unsched_step_index != nil {
+		fields = append(fields, account.FieldTempUnschedStepIndex)
+	}
 	return fields
 }
 
@@ -4318,6 +4471,8 @@ func (m *AccountMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedPriority()
 	case account.FieldRateMultiplier:
 		return m.AddedRateMultiplier()
+	case account.FieldTempUnschedStepIndex:
+		return m.AddedTempUnschedStepIndex()
 	}
 	return nil, false
 }
@@ -4354,6 +4509,13 @@ func (m *AccountMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddRateMultiplier(v)
+		return nil
+	case account.FieldTempUnschedStepIndex:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddTempUnschedStepIndex(v)
 		return nil
 	}
 	return fmt.Errorf("unknown Account numeric field %s", name)
@@ -4398,6 +4560,12 @@ func (m *AccountMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(account.FieldTempUnschedulableReason) {
 		fields = append(fields, account.FieldTempUnschedulableReason)
+	}
+	if m.FieldCleared(account.FieldTempUnschedStepIndex) {
+		fields = append(fields, account.FieldTempUnschedStepIndex)
+	}
+	if m.FieldCleared(account.FieldTempUnschedLastRecoveredAt) {
+		fields = append(fields, account.FieldTempUnschedLastRecoveredAt)
 	}
 	if m.FieldCleared(account.FieldSessionWindowStart) {
 		fields = append(fields, account.FieldSessionWindowStart)
@@ -4457,6 +4625,12 @@ func (m *AccountMutation) ClearField(name string) error {
 		return nil
 	case account.FieldTempUnschedulableReason:
 		m.ClearTempUnschedulableReason()
+		return nil
+	case account.FieldTempUnschedStepIndex:
+		m.ClearTempUnschedStepIndex()
+		return nil
+	case account.FieldTempUnschedLastRecoveredAt:
+		m.ClearTempUnschedLastRecoveredAt()
 		return nil
 	case account.FieldSessionWindowStart:
 		m.ClearSessionWindowStart()
@@ -4549,6 +4723,12 @@ func (m *AccountMutation) ResetField(name string) error {
 		return nil
 	case account.FieldTempUnschedulableReason:
 		m.ResetTempUnschedulableReason()
+		return nil
+	case account.FieldTempUnschedStepIndex:
+		m.ResetTempUnschedStepIndex()
+		return nil
+	case account.FieldTempUnschedLastRecoveredAt:
+		m.ResetTempUnschedLastRecoveredAt()
 		return nil
 	case account.FieldSessionWindowStart:
 		m.ResetSessionWindowStart()

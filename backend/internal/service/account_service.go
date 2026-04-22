@@ -63,6 +63,16 @@ type AccountRepository interface {
 	SetModelRateLimit(ctx context.Context, id int64, scope string, resetAt time.Time) error
 	SetOverloaded(ctx context.Context, id int64, until time.Time) error
 	SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error
+	// SetTempUnschedulableWithStep is the backoff-aware writer. Writes until/reason
+	// and step_index atomically, clears last_recovered_at.
+	SetTempUnschedulableWithStep(ctx context.Context, id int64, until time.Time, reason string, stepIndex int) error
+
+	// StampTempUnschedRecovered records when the unsched window cleared.
+	// Idempotent: only updates when last_recovered_at < recoveredAt.
+	StampTempUnschedRecovered(ctx context.Context, id int64, recoveredAt time.Time) error
+
+	// ClearTempUnschedulableStreak resets the backoff streak (for manual 恢复状态).
+	ClearTempUnschedulableStreak(ctx context.Context, id int64) error
 	ClearTempUnschedulable(ctx context.Context, id int64) error
 	ClearRateLimit(ctx context.Context, id int64) error
 	ClearAntigravityQuotaScopes(ctx context.Context, id int64) error

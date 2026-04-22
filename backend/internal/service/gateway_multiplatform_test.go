@@ -165,6 +165,15 @@ func (m *mockAccountRepoForPlatform) SetOverloaded(ctx context.Context, id int64
 func (m *mockAccountRepoForPlatform) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
 	return nil
 }
+func (m *mockAccountRepoForPlatform) SetTempUnschedulableWithStep(_ context.Context, _ int64, _ time.Time, _ string, _ int) error {
+	return nil
+}
+func (m *mockAccountRepoForPlatform) StampTempUnschedRecovered(_ context.Context, _ int64, _ time.Time) error {
+	return nil
+}
+func (m *mockAccountRepoForPlatform) ClearTempUnschedulableStreak(_ context.Context, _ int64) error {
+	return nil
+}
 func (m *mockAccountRepoForPlatform) ClearTempUnschedulable(ctx context.Context, id int64) error {
 	return nil
 }

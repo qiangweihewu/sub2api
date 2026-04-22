@@ -179,6 +179,19 @@ func (Account) Fields() []ent.Field {
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "text"}),
 
+		// temp_unsched_step_index: 当前在退避序列中的位置（0..N-1）
+		// nil 表示当前无活跃/近期退避链
+		field.Int("temp_unsched_step_index").
+			Optional().
+			Nillable(),
+
+		// temp_unsched_last_recovered_at: 上一次 temp-unsched 窗口自然到期的时间
+		// 用于 fresh-start 判定（now - this > 5min 视为新一轮）
+		field.Time("temp_unsched_last_recovered_at").
+			Optional().
+			Nillable().
+			SchemaType(map[string]string{dialect.Postgres: "timestamptz"}),
+
 		// session_window_*: 会话窗口相关字段
 		// 用于管理某些需要会话时间窗口的 API（如 Claude Pro）
 		field.Time("session_window_start").

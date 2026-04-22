@@ -170,6 +170,16 @@ func TempUnschedulableReason(v string) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldTempUnschedulableReason, v))
 }
 
+// TempUnschedStepIndex applies equality check predicate on the "temp_unsched_step_index" field. It's identical to TempUnschedStepIndexEQ.
+func TempUnschedStepIndex(v int) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldTempUnschedStepIndex, v))
+}
+
+// TempUnschedLastRecoveredAt applies equality check predicate on the "temp_unsched_last_recovered_at" field. It's identical to TempUnschedLastRecoveredAtEQ.
+func TempUnschedLastRecoveredAt(v time.Time) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldTempUnschedLastRecoveredAt, v))
+}
+
 // SessionWindowStart applies equality check predicate on the "session_window_start" field. It's identical to SessionWindowStartEQ.
 func SessionWindowStart(v time.Time) predicate.Account {
 	return predicate.Account(sql.FieldEQ(FieldSessionWindowStart, v))
@@ -1318,6 +1328,106 @@ func TempUnschedulableReasonEqualFold(v string) predicate.Account {
 // TempUnschedulableReasonContainsFold applies the ContainsFold predicate on the "temp_unschedulable_reason" field.
 func TempUnschedulableReasonContainsFold(v string) predicate.Account {
 	return predicate.Account(sql.FieldContainsFold(FieldTempUnschedulableReason, v))
+}
+
+// TempUnschedStepIndexEQ applies the EQ predicate on the "temp_unsched_step_index" field.
+func TempUnschedStepIndexEQ(v int) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldTempUnschedStepIndex, v))
+}
+
+// TempUnschedStepIndexNEQ applies the NEQ predicate on the "temp_unsched_step_index" field.
+func TempUnschedStepIndexNEQ(v int) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldTempUnschedStepIndex, v))
+}
+
+// TempUnschedStepIndexIn applies the In predicate on the "temp_unsched_step_index" field.
+func TempUnschedStepIndexIn(vs ...int) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldTempUnschedStepIndex, vs...))
+}
+
+// TempUnschedStepIndexNotIn applies the NotIn predicate on the "temp_unsched_step_index" field.
+func TempUnschedStepIndexNotIn(vs ...int) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldTempUnschedStepIndex, vs...))
+}
+
+// TempUnschedStepIndexGT applies the GT predicate on the "temp_unsched_step_index" field.
+func TempUnschedStepIndexGT(v int) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldTempUnschedStepIndex, v))
+}
+
+// TempUnschedStepIndexGTE applies the GTE predicate on the "temp_unsched_step_index" field.
+func TempUnschedStepIndexGTE(v int) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldTempUnschedStepIndex, v))
+}
+
+// TempUnschedStepIndexLT applies the LT predicate on the "temp_unsched_step_index" field.
+func TempUnschedStepIndexLT(v int) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldTempUnschedStepIndex, v))
+}
+
+// TempUnschedStepIndexLTE applies the LTE predicate on the "temp_unsched_step_index" field.
+func TempUnschedStepIndexLTE(v int) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldTempUnschedStepIndex, v))
+}
+
+// TempUnschedStepIndexIsNil applies the IsNil predicate on the "temp_unsched_step_index" field.
+func TempUnschedStepIndexIsNil() predicate.Account {
+	return predicate.Account(sql.FieldIsNull(FieldTempUnschedStepIndex))
+}
+
+// TempUnschedStepIndexNotNil applies the NotNil predicate on the "temp_unsched_step_index" field.
+func TempUnschedStepIndexNotNil() predicate.Account {
+	return predicate.Account(sql.FieldNotNull(FieldTempUnschedStepIndex))
+}
+
+// TempUnschedLastRecoveredAtEQ applies the EQ predicate on the "temp_unsched_last_recovered_at" field.
+func TempUnschedLastRecoveredAtEQ(v time.Time) predicate.Account {
+	return predicate.Account(sql.FieldEQ(FieldTempUnschedLastRecoveredAt, v))
+}
+
+// TempUnschedLastRecoveredAtNEQ applies the NEQ predicate on the "temp_unsched_last_recovered_at" field.
+func TempUnschedLastRecoveredAtNEQ(v time.Time) predicate.Account {
+	return predicate.Account(sql.FieldNEQ(FieldTempUnschedLastRecoveredAt, v))
+}
+
+// TempUnschedLastRecoveredAtIn applies the In predicate on the "temp_unsched_last_recovered_at" field.
+func TempUnschedLastRecoveredAtIn(vs ...time.Time) predicate.Account {
+	return predicate.Account(sql.FieldIn(FieldTempUnschedLastRecoveredAt, vs...))
+}
+
+// TempUnschedLastRecoveredAtNotIn applies the NotIn predicate on the "temp_unsched_last_recovered_at" field.
+func TempUnschedLastRecoveredAtNotIn(vs ...time.Time) predicate.Account {
+	return predicate.Account(sql.FieldNotIn(FieldTempUnschedLastRecoveredAt, vs...))
+}
+
+// TempUnschedLastRecoveredAtGT applies the GT predicate on the "temp_unsched_last_recovered_at" field.
+func TempUnschedLastRecoveredAtGT(v time.Time) predicate.Account {
+	return predicate.Account(sql.FieldGT(FieldTempUnschedLastRecoveredAt, v))
+}
+
+// TempUnschedLastRecoveredAtGTE applies the GTE predicate on the "temp_unsched_last_recovered_at" field.
+func TempUnschedLastRecoveredAtGTE(v time.Time) predicate.Account {
+	return predicate.Account(sql.FieldGTE(FieldTempUnschedLastRecoveredAt, v))
+}
+
+// TempUnschedLastRecoveredAtLT applies the LT predicate on the "temp_unsched_last_recovered_at" field.
+func TempUnschedLastRecoveredAtLT(v time.Time) predicate.Account {
+	return predicate.Account(sql.FieldLT(FieldTempUnschedLastRecoveredAt, v))
+}
+
+// TempUnschedLastRecoveredAtLTE applies the LTE predicate on the "temp_unsched_last_recovered_at" field.
+func TempUnschedLastRecoveredAtLTE(v time.Time) predicate.Account {
+	return predicate.Account(sql.FieldLTE(FieldTempUnschedLastRecoveredAt, v))
+}
+
+// TempUnschedLastRecoveredAtIsNil applies the IsNil predicate on the "temp_unsched_last_recovered_at" field.
+func TempUnschedLastRecoveredAtIsNil() predicate.Account {
+	return predicate.Account(sql.FieldIsNull(FieldTempUnschedLastRecoveredAt))
+}
+
+// TempUnschedLastRecoveredAtNotNil applies the NotNil predicate on the "temp_unsched_last_recovered_at" field.
+func TempUnschedLastRecoveredAtNotNil() predicate.Account {
+	return predicate.Account(sql.FieldNotNull(FieldTempUnschedLastRecoveredAt))
 }
 
 // SessionWindowStartEQ applies the EQ predicate on the "session_window_start" field.
