@@ -611,3 +611,55 @@ gateway:
 **Cipher Suites (TLS 1.2):** `49195`, `49196`, `49199`, `49200` (ECDHE variants)
 
 **Curves:** `29` (X25519), `23` (P-256), `24` (P-384), `25` (P-521)
+
+## Fast Upgrade Workflow (Prebuilt Binary)
+
+As of 2026-04-22, upgrades use prebuilt binaries from GitHub Releases instead of
+building Docker images from source on the server. Upgrade time is 10–30 seconds
+instead of 3–10 minutes, and low-memory VPS instances no longer need swap.
+
+### Developer: publish a new release (on Mac)
+
+```bash
+# Bump version first if needed
+echo "1.2.3" > backend/cmd/server/VERSION
+
+# Build frontend + backend with -tags embed, package, and publish to GitHub Releases
+./scripts/release.sh v1.2.3       # explicit version
+./scripts/release.sh              # uses VERSION file
+```
+
+Requirements: `gh` CLI logged in, `pnpm`, Go ≥ 1.26.
+
+### Operator: upgrade a server
+
+```bash
+# Latest release
+curl -sSL https://raw.githubusercontent.com/qiangweihewu/sub2api/main/deploy/install-custom.sh \
+  | sudo bash -s -- upgrade
+
+# Specific version
+curl -sSL https://raw.githubusercontent.com/qiangweihewu/sub2api/main/deploy/install-custom.sh \
+  | sudo env VERSION=v1.2.3 bash -s -- upgrade
+
+# Rollback to the previous image
+curl -sSL https://raw.githubusercontent.com/qiangweihewu/sub2api/main/deploy/install-custom.sh \
+  | sudo bash -s -- rollback
+
+# Force legacy source build (use if release assets are unavailable)
+curl -sSL https://raw.githubusercontent.com/qiangweihewu/sub2api/main/deploy/install-custom.sh \
+  | sudo bash -s -- upgrade-from-source
+```
+
+### What the fast upgrade does
+
+1. Pre-flight: checks architecture (x86_64 only), disk space (>1GB), installs `jq` if missing
+2. Queries GitHub API for latest release tag (or uses `$VERSION`)
+3. Downloads `sub2api-linux-amd64.tar.gz` + `checksums.txt`
+4. Verifies sha256
+5. Extracts `server` binary, stages with `deploy/Dockerfile.runtime`
+6. Tags current `sub2api-custom:latest` → `sub2api-custom:previous` (for rollback)
+7. Builds new image (`docker build` of a 3-line Dockerfile, ~5 seconds)
+8. `docker compose up -d sub2api` (PG and Redis unaffected)
+9. Polls container health for up to 60 seconds
+10. On health failure: auto-rollback to `:previous` image

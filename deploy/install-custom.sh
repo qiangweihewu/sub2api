@@ -326,6 +326,275 @@ do_upgrade() {
 }
 
 # =============================================================================
+# Rollback (swap to the previous image tag)
+# =============================================================================
+do_rollback() {
+    if ! docker image inspect "${IMAGE_NAME}:previous" >/dev/null 2>&1; then
+        print_error "No ${IMAGE_NAME}:previous image found. Cannot rollback."
+        print_info "To install a specific prior version, run:"
+        print_info "  VERSION=vX.Y.Z curl -sSL <install-custom-url> | sudo -E bash -s -- upgrade"
+        exit 1
+    fi
+
+    local failed_tag
+    failed_tag="${IMAGE_NAME}:failed-$(date +%Y%m%d-%H%M%S)"
+    print_info "Archiving current ${IMAGE_NAME}:latest as $failed_tag ..."
+    docker tag "${IMAGE_NAME}:latest" "$failed_tag" 2>/dev/null || true
+
+    print_info "Swapping ${IMAGE_NAME}:previous → ${IMAGE_NAME}:latest ..."
+    docker tag "${IMAGE_NAME}:previous" "${IMAGE_NAME}:latest"
+
+    cd "$INSTALL_DIR/deploy"
+    print_info "Restarting sub2api container..."
+    docker compose -p "$COMPOSE_PROJECT" up -d sub2api
+
+    print_info "Waiting for health check (max 60s)..."
+    local retries=0
+    while [ $retries -lt 30 ]; do
+        local status
+        status=$(docker inspect --format '{{.State.Health.Status}}' sub2api 2>/dev/null || echo "starting")
+        if [ "$status" = "healthy" ]; then
+            print_success "Rollback succeeded. Current version:"
+            docker inspect --format '  {{ index .Config.Labels "sub2api.version" }}' sub2api 2>/dev/null || echo "  (no label)"
+            return 0
+        fi
+        sleep 2
+        retries=$((retries + 1))
+    done
+
+    print_error "Rollback container failed health check after 60s."
+    print_error "Check logs: docker compose -p ${COMPOSE_PROJECT} logs sub2api"
+    exit 1
+}
+
+# =============================================================================
+# Fast Upgrade (pull prebuilt binary from GitHub Release, skip source build)
+# =============================================================================
+
+# Configurable via environment:
+#   VERSION=vX.Y.Z            # target version (default: latest release)
+#   FORCE=1                   # re-upgrade even if already on target version
+#   NO_RELEASE_FALLBACK=1     # fail instead of falling back to source build
+
+_upgrade_fast_preflight() {
+    # jq for GitHub API parsing
+    if ! command -v jq >/dev/null 2>&1; then
+        print_info "Installing jq (required for upgrade)..."
+        apt-get update -qq && apt-get install -y -qq jq 2>/dev/null \
+            || yum install -y jq 2>/dev/null \
+            || { print_error "Failed to install jq. Install it manually and retry."; exit 1; }
+    fi
+
+    # Docker must be available (checked before docker-dir disk checks)
+    if ! command -v docker >/dev/null 2>&1; then
+        print_error "Docker not installed. Run the full installer first (no args)."
+        exit 1
+    fi
+
+    # Installation must exist (source-build fallback needs the git tree)
+    if [ ! -d "$INSTALL_DIR/.git" ]; then
+        print_error "Sub2API not installed. Run the full installer first (no args)."
+        exit 1
+    fi
+
+    # Architecture check
+    local arch
+    arch=$(uname -m)
+    if [ "$arch" != "x86_64" ]; then
+        print_warning "Architecture $arch is not supported by prebuilt releases (only x86_64/amd64)."
+        print_info "Falling back to source build..."
+        do_upgrade
+        exit $?
+    fi
+
+    # Disk check: need at least 1GB free in /tmp and /var/lib/docker
+    local free_tmp free_docker
+    free_tmp=$(df -Pm /tmp 2>/dev/null | awk 'NR==2 {print $4}')
+    free_docker=$(df -Pm /var/lib/docker 2>/dev/null | awk 'NR==2 {print $4}')
+    if [ "${free_tmp:-0}" -lt 1024 ] || [ "${free_docker:-0}" -lt 1024 ]; then
+        print_error "Insufficient disk space. Need >1GB free in /tmp and /var/lib/docker."
+        print_error "  /tmp free: ${free_tmp:-?}MB, /var/lib/docker free: ${free_docker:-?}MB"
+        exit 1
+    fi
+}
+
+# Returns via globals: TARGET_VERSION, CURRENT_VERSION
+# Exits (via fallback or error) if target cannot be determined.
+_upgrade_fast_resolve_versions() {
+    # Target: env VERSION wins, else GitHub "latest"
+    if [ -n "${VERSION:-}" ]; then
+        TARGET_VERSION="$VERSION"
+    else
+        print_info "Fetching latest release tag from GitHub..."
+        local api_response
+        if ! api_response=$(curl -fsSL --max-time 30 \
+            "https://api.github.com/repos/${GITHUB_REPO}/releases/latest" 2>/dev/null); then
+            print_warning "GitHub API unreachable or no releases yet."
+            if [ "${NO_RELEASE_FALLBACK:-0}" = "1" ]; then
+                print_error "NO_RELEASE_FALLBACK=1 set; not falling back to source build."
+                exit 1
+            fi
+            print_info "Falling back to source build..."
+            do_upgrade
+            exit $?
+        fi
+        TARGET_VERSION=$(echo "$api_response" | jq -r '.tag_name // empty')
+        if [ -z "$TARGET_VERSION" ] || [ "$TARGET_VERSION" = "null" ]; then
+            print_warning "No release found in GitHub API response."
+            if [ "${NO_RELEASE_FALLBACK:-0}" = "1" ]; then
+                print_error "NO_RELEASE_FALLBACK=1 set; not falling back."
+                exit 1
+            fi
+            print_info "Falling back to source build..."
+            do_upgrade
+            exit $?
+        fi
+    fi
+
+    # Current: read sub2api container's image label
+    CURRENT_VERSION=$(docker inspect --format '{{ index .Config.Labels "sub2api.version" }}' sub2api 2>/dev/null || echo "")
+    if [ -z "$CURRENT_VERSION" ]; then
+        CURRENT_VERSION="(unknown — no label on current image)"
+    fi
+
+    print_info "Current version: $CURRENT_VERSION"
+    print_info "Target version:  $TARGET_VERSION"
+
+    # Idempotency
+    if [ "$CURRENT_VERSION" = "$TARGET_VERSION" ] && [ "${FORCE:-0}" != "1" ]; then
+        print_success "Already on $TARGET_VERSION. Pass FORCE=1 to re-run."
+        exit 0
+    fi
+}
+
+# Consumes: TARGET_VERSION
+# Produces via globals: STAGE_DIR (contains 'server' + 'Dockerfile')
+# Falls back to do_upgrade on download failure (unless NO_RELEASE_FALLBACK=1).
+# Aborts on checksum failure (does NOT fall back — signals tampering or corruption).
+_upgrade_fast_download() {
+    STAGE_DIR=$(mktemp -d -t sub2api-upgrade-XXXXXX)
+    local asset="sub2api-linux-amd64.tar.gz"
+    local base_url="https://github.com/${GITHUB_REPO}/releases/download/${TARGET_VERSION}"
+    local tarball_url="${base_url}/${asset}"
+    local checksums_url="${base_url}/checksums.txt"
+
+    print_info "Downloading $asset ..."
+    local attempt=0
+    while [ $attempt -lt 3 ]; do
+        if curl -fsSL --max-time 300 -o "$STAGE_DIR/$asset" "$tarball_url" \
+           && curl -fsSL --max-time 60 -o "$STAGE_DIR/checksums.txt" "$checksums_url"; then
+            break
+        fi
+        attempt=$((attempt + 1))
+        if [ $attempt -lt 3 ]; then
+            print_warning "Download failed (attempt $attempt/3), retrying in 5s..."
+            sleep 5
+        fi
+    done
+
+    if [ ! -s "$STAGE_DIR/$asset" ] || [ ! -s "$STAGE_DIR/checksums.txt" ]; then
+        rm -rf "$STAGE_DIR"
+        print_warning "Failed to download release assets after 3 attempts."
+        if [ "${NO_RELEASE_FALLBACK:-0}" = "1" ]; then
+            print_error "NO_RELEASE_FALLBACK=1 set; not falling back."
+            exit 1
+        fi
+        print_info "Falling back to source build..."
+        do_upgrade
+        exit $?
+    fi
+
+    print_info "Verifying sha256..."
+    (cd "$STAGE_DIR" && grep "  ${asset}$" checksums.txt | sha256sum -c -) || {
+        rm -rf "$STAGE_DIR"
+        print_error "Checksum verification failed. Possible tampering or corruption."
+        print_error "Not falling back — please investigate."
+        exit 1
+    }
+    print_success "Checksum OK"
+
+    print_info "Extracting binary..."
+    tar -xzf "$STAGE_DIR/$asset" -C "$STAGE_DIR"
+    if [ ! -x "$STAGE_DIR/server" ]; then
+        rm -rf "$STAGE_DIR"
+        print_error "Extracted tarball did not contain executable 'server'."
+        exit 1
+    fi
+
+    # Stage the runtime Dockerfile alongside the binary
+    if [ ! -f "$INSTALL_DIR/deploy/Dockerfile.runtime" ]; then
+        rm -rf "$STAGE_DIR"
+        print_error "$INSTALL_DIR/deploy/Dockerfile.runtime not found. Ensure code is up to date:"
+        print_error "  cd $INSTALL_DIR && git pull origin main"
+        exit 1
+    fi
+    cp "$INSTALL_DIR/deploy/Dockerfile.runtime" "$STAGE_DIR/Dockerfile"
+
+    print_success "Staged at $STAGE_DIR"
+}
+
+# Consumes: TARGET_VERSION, STAGE_DIR
+# Builds new image, tags previous, restarts via compose, health-checks, auto-rollback on failure.
+_upgrade_fast_switch() {
+    # Tag current latest as previous (best-effort — first upgrade may not have a latest)
+    if docker image inspect "${IMAGE_NAME}:latest" >/dev/null 2>&1; then
+        print_info "Tagging current ${IMAGE_NAME}:latest → ${IMAGE_NAME}:previous"
+        docker tag "${IMAGE_NAME}:latest" "${IMAGE_NAME}:previous"
+    fi
+
+    print_info "Building runtime image from staged binary..."
+    docker build \
+        --label "sub2api.version=${TARGET_VERSION}" \
+        -t "${IMAGE_NAME}:latest" \
+        -t "${IMAGE_NAME}:${TARGET_VERSION}" \
+        "$STAGE_DIR"
+
+    print_info "Restarting sub2api container (PG and Redis unaffected)..."
+    cd "$INSTALL_DIR/deploy"
+    docker compose -p "$COMPOSE_PROJECT" up -d sub2api
+
+    print_info "Waiting for health check (max 60s)..."
+    local retries=0
+    local healthy=0
+    while [ $retries -lt 30 ]; do
+        local status
+        status=$(docker inspect --format '{{.State.Health.Status}}' sub2api 2>/dev/null || echo "starting")
+        if [ "$status" = "healthy" ]; then
+            healthy=1
+            break
+        fi
+        sleep 2
+        retries=$((retries + 1))
+    done
+
+    if [ $healthy -eq 1 ]; then
+        print_success "Upgrade to $TARGET_VERSION succeeded."
+        rm -rf "$STAGE_DIR"
+        return 0
+    fi
+
+    # Auto-rollback
+    print_error "New container failed health check after 60s. Rolling back..."
+    if docker image inspect "${IMAGE_NAME}:previous" >/dev/null 2>&1; then
+        docker tag "${IMAGE_NAME}:previous" "${IMAGE_NAME}:latest"
+        docker compose -p "$COMPOSE_PROJECT" up -d sub2api
+        print_error "Rollback complete. Check logs: docker compose -p ${COMPOSE_PROJECT} logs sub2api"
+    else
+        print_error "No :previous image to rollback to. Container is in failed state."
+        print_error "Check logs: docker compose -p ${COMPOSE_PROJECT} logs sub2api"
+    fi
+    rm -rf "$STAGE_DIR"
+    exit 1
+}
+
+do_upgrade_fast() {
+    _upgrade_fast_preflight
+    _upgrade_fast_resolve_versions
+    _upgrade_fast_download
+    _upgrade_fast_switch
+}
+
+# =============================================================================
 # Uninstall
 # =============================================================================
 do_uninstall() {
@@ -382,7 +651,9 @@ print_completion() {
     echo "  View logs:      docker compose -p sub2api logs -f sub2api"
     echo "  Restart:        docker compose -p sub2api restart"
     echo "  Stop:           docker compose -p sub2api down"
-    echo "  Upgrade:        curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/deploy/install-custom.sh | sudo bash -s -- upgrade"
+    echo "  Upgrade (fast):    curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/deploy/install-custom.sh | sudo bash -s -- upgrade"
+    echo "  Upgrade (legacy):  curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/deploy/install-custom.sh | sudo bash -s -- upgrade-from-source"
+    echo "  Rollback:          curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/main/deploy/install-custom.sh | sudo bash -s -- rollback"
     echo ""
     echo -e "  ${YELLOW}Reverse Proxy:${NC}"
     echo "  Point your Nginx/Caddy to http://127.0.0.1:${server_port}"
@@ -406,7 +677,25 @@ main() {
                 print_error "Sub2API not installed. Run without arguments to install first."
                 exit 1
             fi
+            # Ensure we have the latest install-custom.sh and Dockerfile.runtime
+            cd "$INSTALL_DIR"
+            print_info "Syncing code (for Dockerfile.runtime and script updates)..."
+            git pull origin main
+            do_upgrade_fast
+            exit 0
+            ;;
+        upgrade-from-source)
+            check_root
+            if [ ! -d "$INSTALL_DIR/.git" ]; then
+                print_error "Sub2API not installed. Run without arguments to install first."
+                exit 1
+            fi
             do_upgrade
+            exit 0
+            ;;
+        rollback)
+            check_root
+            do_rollback
             exit 0
             ;;
         uninstall|remove)
@@ -418,9 +707,14 @@ main() {
             echo "Usage: $0 [command]"
             echo ""
             echo "Commands:"
-            echo "  (none)     Install Sub2API (clone, build, start)"
-            echo "  upgrade    Pull latest code, rebuild, restart"
-            echo "  uninstall  Stop and remove everything"
+            echo "  (none)                Install Sub2API (clone, build, start)"
+            echo "  upgrade               Fast upgrade: pull prebuilt binary from latest GitHub Release"
+            echo "                        Env: VERSION=vX.Y.Z  target specific version"
+            echo "                             FORCE=1         re-run even if already on target"
+            echo "                             NO_RELEASE_FALLBACK=1  fail instead of source-build fallback"
+            echo "  upgrade-from-source   Legacy: git pull + docker build (slow, uses lots of RAM)"
+            echo "  rollback              Revert to ${IMAGE_NAME}:previous image"
+            echo "  uninstall             Stop and remove everything"
             echo ""
             exit 0
             ;;
