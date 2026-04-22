@@ -60,12 +60,33 @@ check_tag_unused() {
     fi
 }
 
+# -----------------------------------------------------------------------------
+# Dependencies
+# -----------------------------------------------------------------------------
+check_deps() {
+    local missing=()
+    for cmd in go pnpm gh tar shasum git; do
+        if ! command -v "$cmd" >/dev/null 2>&1; then
+            missing+=("$cmd")
+        fi
+    done
+    if [ "${#missing[@]}" -gt 0 ]; then
+        print_error "Missing required tools: ${missing[*]}"
+        exit 1
+    fi
+    if ! gh auth status >/dev/null 2>&1; then
+        print_error "gh CLI not authenticated. Run: gh auth login"
+        exit 1
+    fi
+}
+
 main() {
     local version
     version=$(resolve_version "${1:-}")
     validate_version "$version"
-    print_info "Resolved version: $version"
-    print_warning "check_tag_unused skipped (no gh calls yet in this step)"
+    check_deps
+    check_tag_unused "$version"
+    print_info "Pre-flight OK. Version: $version"
 }
 
 # Only run main if executed directly (allows sourcing for tests)
