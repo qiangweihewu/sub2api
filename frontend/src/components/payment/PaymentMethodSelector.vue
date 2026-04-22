@@ -43,6 +43,7 @@ import { METHOD_ORDER } from './providerConfig'
 import alipayIcon from '@/assets/icons/alipay.svg'
 import wxpayIcon from '@/assets/icons/wxpay.svg'
 import stripeIcon from '@/assets/icons/stripe.svg'
+import cardIcon from '@/assets/icons/card.svg'
 
 export interface PaymentMethodOption {
   type: string
@@ -64,6 +65,7 @@ const { t } = useI18n()
 const METHOD_ICONS: Record<string, string> = {
   alipay: alipayIcon,
   wxpay: wxpayIcon,
+  card: cardIcon,
   stripe: stripeIcon,
 }
 
