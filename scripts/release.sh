@@ -138,6 +138,24 @@ package_and_checksum() {
     )
 }
 
+publish_release() {
+    local version="$1"
+    print_info "Creating GitHub release $version..."
+    (
+        cd "$REPO_ROOT"
+        gh release create "$version" \
+          --title "$version" \
+          --generate-notes \
+          "dist/sub2api-linux-amd64.tar.gz" \
+          "dist/checksums.txt"
+    )
+    print_success "Released $version"
+    echo ""
+    echo "  To upgrade a production server, run there:"
+    echo "  curl -sSL https://raw.githubusercontent.com/qiangweihewu/sub2api/main/deploy/install-custom.sh | sudo bash -s -- upgrade"
+    echo ""
+}
+
 main() {
     local version
     version=$(resolve_version "${1:-}")
@@ -149,7 +167,7 @@ main() {
     build_frontend
     build_backend "${version#v}"
     package_and_checksum
-    print_warning "Release creation skipped — run with publish step (next task)"
+    publish_release "$version"
 }
 
 # Only run main if executed directly (allows sourcing for tests)
