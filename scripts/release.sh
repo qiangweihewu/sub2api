@@ -27,6 +27,11 @@ print_error()   { echo -e "${RED}[ERR ]${NC} $*" >&2; }
 # Locate repo root (directory containing backend/, frontend/, scripts/)
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
+# GitHub repo this release targets. Pin explicitly because `gh` defaults to
+# the upstream repo when this clone is a fork, which would cause collisions
+# with upstream's release tags.
+FORK_REPO="qiangweihewu/sub2api"
+
 # -----------------------------------------------------------------------------
 # Version parsing
 # -----------------------------------------------------------------------------
@@ -54,7 +59,7 @@ validate_version() {
 
 check_tag_unused() {
     local v="$1"
-    if gh release view "$v" >/dev/null 2>&1; then
+    if gh release view "$v" --repo "$FORK_REPO" >/dev/null 2>&1; then
         print_error "Release $v already exists on GitHub. Pick a different version."
         exit 1
     fi
@@ -140,10 +145,11 @@ package_and_checksum() {
 
 publish_release() {
     local version="$1"
-    print_info "Creating GitHub release $version..."
+    print_info "Creating GitHub release $version on $FORK_REPO..."
     (
         cd "$REPO_ROOT"
         gh release create "$version" \
+          --repo "$FORK_REPO" \
           --title "$version" \
           --generate-notes \
           "dist/sub2api-linux-amd64.tar.gz" \
