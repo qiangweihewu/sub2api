@@ -885,7 +885,16 @@ function applyScenarioError(err: unknown, paymentMethod: string): boolean {
     return false
   }
   errorMessage.value = t(descriptor.messageKey)
-  errorHintMessage.value = descriptor.hintKey ? t(descriptor.hintKey) : ''
+  // Build the hint line: upstream gateway text (with prefix) takes precedence over
+  // the generic i18n hint when both are present; otherwise fall back to the i18n hint.
+  const baseHint = descriptor.hintKey ? t(descriptor.hintKey) : ''
+  if (descriptor.upstreamError) {
+    const prefix = t('payment.errors.gatewayReturnedPrefix')
+    const upstreamLine = `${prefix}${descriptor.upstreamError}`
+    errorHintMessage.value = baseHint ? `${upstreamLine} ${baseHint}` : upstreamLine
+  } else {
+    errorHintMessage.value = baseHint
+  }
   appStore.showError(buildPaymentErrorToastMessage(errorMessage.value, errorHintMessage.value))
   return true
 }

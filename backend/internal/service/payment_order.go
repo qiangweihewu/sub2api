@@ -580,7 +580,11 @@ func classifyCreatePaymentError(req CreateOrderRequest, providerKey string, err 
 			"action": "open_in_wechat_or_scan_qr",
 		})
 	}
-	return infraerrors.ServiceUnavailable("PAYMENT_GATEWAY_ERROR", fmt.Sprintf("payment gateway error: %s", err.Error()))
+	return infraerrors.ServiceUnavailable("PAYMENT_GATEWAY_ERROR", "payment gateway error").
+		WithMetadata(map[string]string{
+			"upstream_error": err.Error(),
+			"provider":       providerKey,
+		})
 }
 
 func buildCreateOrderResponse(order *dbent.PaymentOrder, req CreateOrderRequest, payAmount float64, sel *payment.InstanceSelection, pr *payment.CreatePaymentResponse, resultType payment.CreatePaymentResultType) *CreateOrderResponse {
