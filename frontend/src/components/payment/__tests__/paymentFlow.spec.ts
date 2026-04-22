@@ -56,6 +56,26 @@ describe('getVisibleMethods', () => {
     expect(visible.alipay.single_min).toBe(2)
     expect(visible.wxpay.fee_rate).toBe(1.2)
   })
+
+  it('includes card when present in input', () => {
+    const visible = getVisibleMethods({
+      card: methodLimit({ single_max: 50000 }),
+      alipay: methodLimit({ single_min: 1 }),
+    })
+
+    expect(Object.keys(visible).sort()).toEqual(['alipay', 'card'])
+    expect(visible.card.single_max).toBe(50000)
+  })
+
+  it('drops unknown methods like cashapp and apple_pay', () => {
+    const visible = getVisibleMethods({
+      cashapp: methodLimit(),
+      apple_pay: methodLimit(),
+      card: methodLimit(),
+    })
+
+    expect(Object.keys(visible)).toEqual(['card'])
+  })
 })
 
 describe('decidePaymentLaunch', () => {
