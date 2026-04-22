@@ -33,11 +33,20 @@
         </span>
       </button>
     </div>
+    <StripeExpressCheckout
+      v-if="hasCardMethod && publishableKey && amountInCents && currency"
+      :publishable-key="publishableKey"
+      :amount-in-cents="amountInCents"
+      :currency="currency"
+      @confirm="onExpressCheckoutConfirm"
+      @error="onExpressCheckoutError"
+    />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import StripeExpressCheckout from './StripeExpressCheckout.vue'
 import { useI18n } from 'vue-i18n'
 import { METHOD_ORDER } from './providerConfig'
 import alipayIcon from '@/assets/icons/alipay.svg'
@@ -54,10 +63,14 @@ export interface PaymentMethodOption {
 const props = defineProps<{
   methods: PaymentMethodOption[]
   selected: string
+  publishableKey?: string
+  amountInCents?: number
+  currency?: string
 }>()
 
 const emit = defineEmits<{
   select: [type: string]
+  expressCheckout: [payload: { event: any; elements: any; stripe: any }]
 }>()
 
 const { t } = useI18n()
@@ -77,6 +90,17 @@ const sortedMethods = computed(() => {
     return (ai === -1 ? 999 : ai) - (bi === -1 ? 999 : bi)
   })
 })
+
+const hasCardMethod = computed(() => props.methods.some(m => m.type === 'card' && m.available))
+
+function onExpressCheckoutConfirm(payload: { event: any; elements: any; stripe: any }) {
+  emit('expressCheckout', payload)
+}
+
+function onExpressCheckoutError(err: Error) {
+  // Non-fatal: user can still use manual buttons. Log for ops visibility.
+  console.warn('[StripeExpressCheckout]', err)
+}
 
 function methodIcon(type: string): string {
   if (type.includes('alipay')) return METHOD_ICONS.alipay
