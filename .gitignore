@@ -132,3 +132,8 @@ docs/
 frontend/coverage/
 aicodex
 output/
+
+# ===================
+# Release artifacts (scripts/release.sh)
+# ===================
+/dist/
