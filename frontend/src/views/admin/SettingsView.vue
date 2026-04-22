@@ -6476,6 +6476,8 @@ function getProviderVisibleMethods(
     }
   } else if (provider.provider_key === "easypay") {
     supportedTypes.forEach(addMethod);
+  } else if (provider.provider_key === "stripe") {
+    supportedTypes.forEach(addMethod);
   }
 
   return Array.from(methods);
