@@ -404,3 +404,15 @@ func (r *geminiErrorPolicyRepo) SetTempUnschedulable(_ context.Context, _ int64,
 	r.setTempCalls++
 	return nil
 }
+
+func (r *geminiErrorPolicyRepo) SetTempUnschedulableWithStep(_ context.Context, _ int64, _ time.Time, _ string, _ int) error {
+	return nil
+}
+
+func (r *geminiErrorPolicyRepo) StampTempUnschedRecovered(_ context.Context, _ int64, _ time.Time) error {
+	return nil
+}
+
+func (r *geminiErrorPolicyRepo) ClearTempUnschedulableStreak(_ context.Context, _ int64) error {
+	return nil
+}

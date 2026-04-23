@@ -64,6 +64,18 @@ func (r *tokenRefreshAccountRepo) SetTempUnschedulable(ctx context.Context, id i
 	return nil
 }
 
+func (r *tokenRefreshAccountRepo) SetTempUnschedulableWithStep(_ context.Context, _ int64, _ time.Time, _ string, _ int) error {
+	return nil
+}
+
+func (r *tokenRefreshAccountRepo) StampTempUnschedRecovered(_ context.Context, _ int64, _ time.Time) error {
+	return nil
+}
+
+func (r *tokenRefreshAccountRepo) ClearTempUnschedulableStreak(_ context.Context, _ int64) error {
+	return nil
+}
+
 type tokenCacheInvalidatorStub struct {
 	calls int
 	err   error

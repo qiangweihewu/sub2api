@@ -48,6 +48,9 @@ type Account struct {
 	TempUnschedulableUntil  *time.Time
 	TempUnschedulableReason string
 
+	TempUnschedStepIndex       *int
+	TempUnschedLastRecoveredAt *time.Time
+
 	SessionWindowStart  *time.Time
 	SessionWindowEnd    *time.Time
 	SessionWindowStatus string

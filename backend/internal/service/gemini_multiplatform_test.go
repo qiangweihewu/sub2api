@@ -156,6 +156,15 @@ func (m *mockAccountRepoForGemini) SetOverloaded(ctx context.Context, id int64, 
 func (m *mockAccountRepoForGemini) SetTempUnschedulable(ctx context.Context, id int64, until time.Time, reason string) error {
 	return nil
 }
+func (m *mockAccountRepoForGemini) SetTempUnschedulableWithStep(_ context.Context, _ int64, _ time.Time, _ string, _ int) error {
+	return nil
+}
+func (m *mockAccountRepoForGemini) StampTempUnschedRecovered(_ context.Context, _ int64, _ time.Time) error {
+	return nil
+}
+func (m *mockAccountRepoForGemini) ClearTempUnschedulableStreak(_ context.Context, _ int64) error {
+	return nil
+}
 func (m *mockAccountRepoForGemini) ClearTempUnschedulable(ctx context.Context, id int64) error {
 	return nil
 }

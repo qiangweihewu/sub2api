@@ -443,6 +443,53 @@ func (_u *AccountUpdate) ClearTempUnschedulableReason() *AccountUpdate {
 	return _u
 }
 
+// SetTempUnschedStepIndex sets the "temp_unsched_step_index" field.
+func (_u *AccountUpdate) SetTempUnschedStepIndex(v int) *AccountUpdate {
+	_u.mutation.ResetTempUnschedStepIndex()
+	_u.mutation.SetTempUnschedStepIndex(v)
+	return _u
+}
+
+// SetNillableTempUnschedStepIndex sets the "temp_unsched_step_index" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableTempUnschedStepIndex(v *int) *AccountUpdate {
+	if v != nil {
+		_u.SetTempUnschedStepIndex(*v)
+	}
+	return _u
+}
+
+// AddTempUnschedStepIndex adds value to the "temp_unsched_step_index" field.
+func (_u *AccountUpdate) AddTempUnschedStepIndex(v int) *AccountUpdate {
+	_u.mutation.AddTempUnschedStepIndex(v)
+	return _u
+}
+
+// ClearTempUnschedStepIndex clears the value of the "temp_unsched_step_index" field.
+func (_u *AccountUpdate) ClearTempUnschedStepIndex() *AccountUpdate {
+	_u.mutation.ClearTempUnschedStepIndex()
+	return _u
+}
+
+// SetTempUnschedLastRecoveredAt sets the "temp_unsched_last_recovered_at" field.
+func (_u *AccountUpdate) SetTempUnschedLastRecoveredAt(v time.Time) *AccountUpdate {
+	_u.mutation.SetTempUnschedLastRecoveredAt(v)
+	return _u
+}
+
+// SetNillableTempUnschedLastRecoveredAt sets the "temp_unsched_last_recovered_at" field if the given value is not nil.
+func (_u *AccountUpdate) SetNillableTempUnschedLastRecoveredAt(v *time.Time) *AccountUpdate {
+	if v != nil {
+		_u.SetTempUnschedLastRecoveredAt(*v)
+	}
+	return _u
+}
+
+// ClearTempUnschedLastRecoveredAt clears the value of the "temp_unsched_last_recovered_at" field.
+func (_u *AccountUpdate) ClearTempUnschedLastRecoveredAt() *AccountUpdate {
+	_u.mutation.ClearTempUnschedLastRecoveredAt()
+	return _u
+}
+
 // SetSessionWindowStart sets the "session_window_start" field.
 func (_u *AccountUpdate) SetSessionWindowStart(v time.Time) *AccountUpdate {
 	_u.mutation.SetSessionWindowStart(v)
@@ -788,6 +835,21 @@ func (_u *AccountUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if _u.mutation.TempUnschedulableReasonCleared() {
 		_spec.ClearField(account.FieldTempUnschedulableReason, field.TypeString)
+	}
+	if value, ok := _u.mutation.TempUnschedStepIndex(); ok {
+		_spec.SetField(account.FieldTempUnschedStepIndex, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedTempUnschedStepIndex(); ok {
+		_spec.AddField(account.FieldTempUnschedStepIndex, field.TypeInt, value)
+	}
+	if _u.mutation.TempUnschedStepIndexCleared() {
+		_spec.ClearField(account.FieldTempUnschedStepIndex, field.TypeInt)
+	}
+	if value, ok := _u.mutation.TempUnschedLastRecoveredAt(); ok {
+		_spec.SetField(account.FieldTempUnschedLastRecoveredAt, field.TypeTime, value)
+	}
+	if _u.mutation.TempUnschedLastRecoveredAtCleared() {
+		_spec.ClearField(account.FieldTempUnschedLastRecoveredAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.SessionWindowStart(); ok {
 		_spec.SetField(account.FieldSessionWindowStart, field.TypeTime, value)
@@ -1370,6 +1432,53 @@ func (_u *AccountUpdateOne) ClearTempUnschedulableReason() *AccountUpdateOne {
 	return _u
 }
 
+// SetTempUnschedStepIndex sets the "temp_unsched_step_index" field.
+func (_u *AccountUpdateOne) SetTempUnschedStepIndex(v int) *AccountUpdateOne {
+	_u.mutation.ResetTempUnschedStepIndex()
+	_u.mutation.SetTempUnschedStepIndex(v)
+	return _u
+}
+
+// SetNillableTempUnschedStepIndex sets the "temp_unsched_step_index" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableTempUnschedStepIndex(v *int) *AccountUpdateOne {
+	if v != nil {
+		_u.SetTempUnschedStepIndex(*v)
+	}
+	return _u
+}
+
+// AddTempUnschedStepIndex adds value to the "temp_unsched_step_index" field.
+func (_u *AccountUpdateOne) AddTempUnschedStepIndex(v int) *AccountUpdateOne {
+	_u.mutation.AddTempUnschedStepIndex(v)
+	return _u
+}
+
+// ClearTempUnschedStepIndex clears the value of the "temp_unsched_step_index" field.
+func (_u *AccountUpdateOne) ClearTempUnschedStepIndex() *AccountUpdateOne {
+	_u.mutation.ClearTempUnschedStepIndex()
+	return _u
+}
+
+// SetTempUnschedLastRecoveredAt sets the "temp_unsched_last_recovered_at" field.
+func (_u *AccountUpdateOne) SetTempUnschedLastRecoveredAt(v time.Time) *AccountUpdateOne {
+	_u.mutation.SetTempUnschedLastRecoveredAt(v)
+	return _u
+}
+
+// SetNillableTempUnschedLastRecoveredAt sets the "temp_unsched_last_recovered_at" field if the given value is not nil.
+func (_u *AccountUpdateOne) SetNillableTempUnschedLastRecoveredAt(v *time.Time) *AccountUpdateOne {
+	if v != nil {
+		_u.SetTempUnschedLastRecoveredAt(*v)
+	}
+	return _u
+}
+
+// ClearTempUnschedLastRecoveredAt clears the value of the "temp_unsched_last_recovered_at" field.
+func (_u *AccountUpdateOne) ClearTempUnschedLastRecoveredAt() *AccountUpdateOne {
+	_u.mutation.ClearTempUnschedLastRecoveredAt()
+	return _u
+}
+
 // SetSessionWindowStart sets the "session_window_start" field.
 func (_u *AccountUpdateOne) SetSessionWindowStart(v time.Time) *AccountUpdateOne {
 	_u.mutation.SetSessionWindowStart(v)
@@ -1745,6 +1854,21 @@ func (_u *AccountUpdateOne) sqlSave(ctx context.Context) (_node *Account, err er
 	}
 	if _u.mutation.TempUnschedulableReasonCleared() {
 		_spec.ClearField(account.FieldTempUnschedulableReason, field.TypeString)
+	}
+	if value, ok := _u.mutation.TempUnschedStepIndex(); ok {
+		_spec.SetField(account.FieldTempUnschedStepIndex, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedTempUnschedStepIndex(); ok {
+		_spec.AddField(account.FieldTempUnschedStepIndex, field.TypeInt, value)
+	}
+	if _u.mutation.TempUnschedStepIndexCleared() {
+		_spec.ClearField(account.FieldTempUnschedStepIndex, field.TypeInt)
+	}
+	if value, ok := _u.mutation.TempUnschedLastRecoveredAt(); ok {
+		_spec.SetField(account.FieldTempUnschedLastRecoveredAt, field.TypeTime, value)
+	}
+	if _u.mutation.TempUnschedLastRecoveredAtCleared() {
+		_spec.ClearField(account.FieldTempUnschedLastRecoveredAt, field.TypeTime)
 	}
 	if value, ok := _u.mutation.SessionWindowStart(); ok {
 		_spec.SetField(account.FieldSessionWindowStart, field.TypeTime, value)

@@ -171,6 +171,18 @@ func (s *accountRepoStub) SetTempUnschedulable(ctx context.Context, id int64, un
 	panic("unexpected SetTempUnschedulable call")
 }
 
+func (s *accountRepoStub) SetTempUnschedulableWithStep(_ context.Context, _ int64, _ time.Time, _ string, _ int) error {
+	panic("unexpected SetTempUnschedulableWithStep call")
+}
+
+func (s *accountRepoStub) StampTempUnschedRecovered(_ context.Context, _ int64, _ time.Time) error {
+	panic("unexpected StampTempUnschedRecovered call")
+}
+
+func (s *accountRepoStub) ClearTempUnschedulableStreak(_ context.Context, _ int64) error {
+	panic("unexpected ClearTempUnschedulableStreak call")
+}
+
 func (s *accountRepoStub) ClearTempUnschedulable(ctx context.Context, id int64) error {
 	panic("unexpected ClearTempUnschedulable call")
 }

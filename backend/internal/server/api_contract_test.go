@@ -1551,6 +1551,18 @@ func (s *stubAccountRepo) SetTempUnschedulable(ctx context.Context, id int64, un
 	return errors.New("not implemented")
 }
 
+func (s *stubAccountRepo) SetTempUnschedulableWithStep(_ context.Context, _ int64, _ time.Time, _ string, _ int) error {
+	return errors.New("not implemented")
+}
+
+func (s *stubAccountRepo) StampTempUnschedRecovered(_ context.Context, _ int64, _ time.Time) error {
+	return errors.New("not implemented")
+}
+
+func (s *stubAccountRepo) ClearTempUnschedulableStreak(_ context.Context, _ int64) error {
+	return errors.New("not implemented")
+}
+
 func (s *stubAccountRepo) ClearTempUnschedulable(ctx context.Context, id int64) error {
 	return errors.New("not implemented")
 }

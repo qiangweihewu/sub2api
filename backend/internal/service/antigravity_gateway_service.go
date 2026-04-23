@@ -2485,33 +2485,59 @@ func isGoogleProjectConfigError(lowerMsg string) bool {
 	return strings.Contains(lowerMsg, "invalid project resource name")
 }
 
-// googleConfigErrorCooldown 服务端配置类 400 错误的临时封禁时长
-const googleConfigErrorCooldown = 1 * time.Minute
-
 // tempUnscheduleGoogleConfigError 对服务端配置类 400 错误触发临时封禁，
-// 避免短时间内反复调度到同一个有问题的账号。
-func tempUnscheduleGoogleConfigError(ctx context.Context, repo AccountRepository, accountID int64, logPrefix string) {
-	until := time.Now().Add(googleConfigErrorCooldown)
-	reason := "400: invalid project resource name (auto temp-unschedule 1m)"
-	if err := repo.SetTempUnschedulable(ctx, accountID, until, reason); err != nil {
-		log.Printf("%s temp_unschedule_failed account=%d error=%v", logPrefix, accountID, err)
-	} else {
-		log.Printf("%s temp_unscheduled account=%d until=%v reason=%q", logPrefix, accountID, until.Format("15:04:05"), reason)
+// 避免短时间内反复调度到同一个有问题的账号。走全局指数退避
+// ([1,5,15,30,60]m)；5 分钟内无触发则从头开始。
+func tempUnscheduleGoogleConfigError(ctx context.Context, rateLimit *RateLimitService, repo AccountRepository, accountID int64, logPrefix string) {
+	if rateLimit == nil {
+		// Fallback: older call paths without rateLimit wired in still get a 1m cooldown.
+		until := time.Now().Add(1 * time.Minute)
+		reason := "400: invalid project resource name (auto temp-unschedule 1m)"
+		if err := repo.SetTempUnschedulable(ctx, accountID, until, reason); err != nil {
+			log.Printf("%s temp_unschedule_failed account=%d error=%v", logPrefix, accountID, err)
+		} else {
+			log.Printf("%s temp_unscheduled account=%d until=%v reason=%q", logPrefix, accountID, until.Format("15:04:05"), reason)
+		}
+		return
+	}
+	account, err := repo.GetByID(ctx, accountID)
+	if err != nil || account == nil {
+		log.Printf("%s temp_unschedule_backoff_account_lookup_failed account=%d error=%v", logPrefix, accountID, err)
+		return
+	}
+	if ok := rateLimit.triggerTempUnschedulableWithBackoff(
+		ctx, account, 400, "invalid project resource name",
+		"google config error: invalid project resource name", nil, -1,
+	); ok {
+		log.Printf("%s temp_unscheduled_backoff account=%d reason=google_config_error", logPrefix, accountID)
 	}
 }
 
-// emptyResponseCooldown 空流式响应的临时封禁时长
-const emptyResponseCooldown = 1 * time.Minute
-
 // tempUnscheduleEmptyResponse 对空流式响应触发临时封禁，
-// 避免短时间内反复调度到同一个返回空响应的账号。
-func tempUnscheduleEmptyResponse(ctx context.Context, repo AccountRepository, accountID int64, logPrefix string) {
-	until := time.Now().Add(emptyResponseCooldown)
-	reason := "empty stream response (auto temp-unschedule 1m)"
-	if err := repo.SetTempUnschedulable(ctx, accountID, until, reason); err != nil {
-		log.Printf("%s temp_unschedule_failed account=%d error=%v", logPrefix, accountID, err)
-	} else {
-		log.Printf("%s temp_unscheduled account=%d until=%v reason=%q", logPrefix, accountID, until.Format("15:04:05"), reason)
+// 避免短时间内反复调度到同一个返回空响应的账号。走全局指数退避
+// ([1,5,15,30,60]m)；5 分钟内无触发则从头开始。
+func tempUnscheduleEmptyResponse(ctx context.Context, rateLimit *RateLimitService, repo AccountRepository, accountID int64, logPrefix string) {
+	if rateLimit == nil {
+		// Fallback: older call paths without rateLimit wired in still get a 1m cooldown.
+		until := time.Now().Add(1 * time.Minute)
+		reason := "empty stream response (auto temp-unschedule 1m)"
+		if err := repo.SetTempUnschedulable(ctx, accountID, until, reason); err != nil {
+			log.Printf("%s temp_unschedule_failed account=%d error=%v", logPrefix, accountID, err)
+		} else {
+			log.Printf("%s temp_unscheduled account=%d until=%v reason=%q", logPrefix, accountID, until.Format("15:04:05"), reason)
+		}
+		return
+	}
+	account, err := repo.GetByID(ctx, accountID)
+	if err != nil || account == nil {
+		log.Printf("%s temp_unschedule_backoff_account_lookup_failed account=%d error=%v", logPrefix, accountID, err)
+		return
+	}
+	if ok := rateLimit.triggerTempUnschedulableWithBackoff(
+		ctx, account, 0, "empty response",
+		"empty stream response", nil, -1,
+	); ok {
+		log.Printf("%s temp_unscheduled_backoff account=%d reason=empty_response", logPrefix, accountID)
 	}
 }
 

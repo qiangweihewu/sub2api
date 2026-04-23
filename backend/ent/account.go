@@ -69,6 +69,10 @@ type Account struct {
 	TempUnschedulableUntil *time.Time `json:"temp_unschedulable_until,omitempty"`
 	// TempUnschedulableReason holds the value of the "temp_unschedulable_reason" field.
 	TempUnschedulableReason *string `json:"temp_unschedulable_reason,omitempty"`
+	// TempUnschedStepIndex holds the value of the "temp_unsched_step_index" field.
+	TempUnschedStepIndex *int `json:"temp_unsched_step_index,omitempty"`
+	// TempUnschedLastRecoveredAt holds the value of the "temp_unsched_last_recovered_at" field.
+	TempUnschedLastRecoveredAt *time.Time `json:"temp_unsched_last_recovered_at,omitempty"`
 	// SessionWindowStart holds the value of the "session_window_start" field.
 	SessionWindowStart *time.Time `json:"session_window_start,omitempty"`
 	// SessionWindowEnd holds the value of the "session_window_end" field.
@@ -145,11 +149,11 @@ func (*Account) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullBool)
 		case account.FieldRateMultiplier:
 			values[i] = new(sql.NullFloat64)
-		case account.FieldID, account.FieldProxyID, account.FieldConcurrency, account.FieldLoadFactor, account.FieldPriority:
+		case account.FieldID, account.FieldProxyID, account.FieldConcurrency, account.FieldLoadFactor, account.FieldPriority, account.FieldTempUnschedStepIndex:
 			values[i] = new(sql.NullInt64)
 		case account.FieldName, account.FieldNotes, account.FieldPlatform, account.FieldType, account.FieldStatus, account.FieldErrorMessage, account.FieldTempUnschedulableReason, account.FieldSessionWindowStatus:
 			values[i] = new(sql.NullString)
-		case account.FieldCreatedAt, account.FieldUpdatedAt, account.FieldDeletedAt, account.FieldLastUsedAt, account.FieldExpiresAt, account.FieldRateLimitedAt, account.FieldRateLimitResetAt, account.FieldOverloadUntil, account.FieldTempUnschedulableUntil, account.FieldSessionWindowStart, account.FieldSessionWindowEnd:
+		case account.FieldCreatedAt, account.FieldUpdatedAt, account.FieldDeletedAt, account.FieldLastUsedAt, account.FieldExpiresAt, account.FieldRateLimitedAt, account.FieldRateLimitResetAt, account.FieldOverloadUntil, account.FieldTempUnschedulableUntil, account.FieldTempUnschedLastRecoveredAt, account.FieldSessionWindowStart, account.FieldSessionWindowEnd:
 			values[i] = new(sql.NullTime)
 		default:
 			values[i] = new(sql.UnknownType)
@@ -338,6 +342,20 @@ func (_m *Account) assignValues(columns []string, values []any) error {
 				_m.TempUnschedulableReason = new(string)
 				*_m.TempUnschedulableReason = value.String
 			}
+		case account.FieldTempUnschedStepIndex:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field temp_unsched_step_index", values[i])
+			} else if value.Valid {
+				_m.TempUnschedStepIndex = new(int)
+				*_m.TempUnschedStepIndex = int(value.Int64)
+			}
+		case account.FieldTempUnschedLastRecoveredAt:
+			if value, ok := values[i].(*sql.NullTime); !ok {
+				return fmt.Errorf("unexpected type %T for field temp_unsched_last_recovered_at", values[i])
+			} else if value.Valid {
+				_m.TempUnschedLastRecoveredAt = new(time.Time)
+				*_m.TempUnschedLastRecoveredAt = value.Time
+			}
 		case account.FieldSessionWindowStart:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field session_window_start", values[i])
@@ -512,6 +530,16 @@ func (_m *Account) String() string {
 	if v := _m.TempUnschedulableReason; v != nil {
 		builder.WriteString("temp_unschedulable_reason=")
 		builder.WriteString(*v)
+	}
+	builder.WriteString(", ")
+	if v := _m.TempUnschedStepIndex; v != nil {
+		builder.WriteString("temp_unsched_step_index=")
+		builder.WriteString(fmt.Sprintf("%v", *v))
+	}
+	builder.WriteString(", ")
+	if v := _m.TempUnschedLastRecoveredAt; v != nil {
+		builder.WriteString("temp_unsched_last_recovered_at=")
+		builder.WriteString(v.Format(time.ANSIC))
 	}
 	builder.WriteString(", ")
 	if v := _m.SessionWindowStart; v != nil {

@@ -2336,6 +2336,7 @@ export default {
         until: 'Until',
         remaining: 'Remaining',
         matchedKeyword: 'Matched Keyword',
+        stepIndex: 'Consecutive Triggers',
         errorMessage: 'Error Details',
         reset: 'Recover State',
         resetSuccess: 'Account state recovered successfully',

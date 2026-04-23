@@ -1143,11 +1143,64 @@ func (r *accountRepository) SetTempUnschedulable(ctx context.Context, id int64, 
 	return nil
 }
 
+func (r *accountRepository) SetTempUnschedulableWithStep(ctx context.Context, id int64, until time.Time, reason string, stepIndex int) error {
+	_, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET temp_unschedulable_until = $1,
+			temp_unschedulable_reason = $2,
+			temp_unsched_step_index = $3,
+			temp_unsched_last_recovered_at = NULL,
+			updated_at = NOW()
+		WHERE id = $4
+			AND deleted_at IS NULL
+			AND (temp_unschedulable_until IS NULL OR temp_unschedulable_until < $1)
+	`, until, reason, stepIndex, id)
+	if err != nil {
+		return err
+	}
+	if err := enqueueSchedulerOutbox(ctx, r.sql, service.SchedulerOutboxEventAccountChanged, &id, nil, nil); err != nil {
+		logger.LegacyPrintf("repository.account", "[SchedulerOutbox] enqueue temp unschedulable with step failed: account=%d err=%v", id, err)
+	}
+	r.syncSchedulerAccountSnapshot(ctx, id)
+	return nil
+}
+
+func (r *accountRepository) StampTempUnschedRecovered(ctx context.Context, id int64, recoveredAt time.Time) error {
+	_, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET temp_unsched_last_recovered_at = $1,
+			updated_at = NOW()
+		WHERE id = $2
+			AND deleted_at IS NULL
+			AND (temp_unsched_last_recovered_at IS NULL OR temp_unsched_last_recovered_at < $1)
+	`, recoveredAt, id)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
+func (r *accountRepository) ClearTempUnschedulableStreak(ctx context.Context, id int64) error {
+	_, err := r.sql.ExecContext(ctx, `
+		UPDATE accounts
+		SET temp_unsched_step_index = NULL,
+			temp_unsched_last_recovered_at = NULL,
+			updated_at = NOW()
+		WHERE id = $1
+			AND deleted_at IS NULL
+	`, id)
+	if err != nil {
+		return err
+	}
+	return nil
+}
+
 func (r *accountRepository) ClearTempUnschedulable(ctx context.Context, id int64) error {
 	_, err := r.sql.ExecContext(ctx, `
 		UPDATE accounts
 		SET temp_unschedulable_until = NULL,
 			temp_unschedulable_reason = NULL,
+			temp_unsched_step_index = NULL,
 			updated_at = NOW()
 		WHERE id = $1
 			AND deleted_at IS NULL
@@ -1722,34 +1775,36 @@ func accountEntityToService(m *dbent.Account) *service.Account {
 	rateMultiplier := m.RateMultiplier
 
 	return &service.Account{
-		ID:                      m.ID,
-		Name:                    m.Name,
-		Notes:                   m.Notes,
-		Platform:                m.Platform,
-		Type:                    m.Type,
-		Credentials:             copyJSONMap(m.Credentials),
-		Extra:                   copyJSONMap(m.Extra),
-		ProxyID:                 m.ProxyID,
-		Concurrency:             m.Concurrency,
-		Priority:                m.Priority,
-		RateMultiplier:          &rateMultiplier,
-		LoadFactor:              m.LoadFactor,
-		Status:                  m.Status,
-		ErrorMessage:            derefString(m.ErrorMessage),
-		LastUsedAt:              m.LastUsedAt,
-		ExpiresAt:               m.ExpiresAt,
-		AutoPauseOnExpired:      m.AutoPauseOnExpired,
-		CreatedAt:               m.CreatedAt,
-		UpdatedAt:               m.UpdatedAt,
-		Schedulable:             m.Schedulable,
-		RateLimitedAt:           m.RateLimitedAt,
-		RateLimitResetAt:        m.RateLimitResetAt,
-		OverloadUntil:           m.OverloadUntil,
-		TempUnschedulableUntil:  m.TempUnschedulableUntil,
-		TempUnschedulableReason: derefString(m.TempUnschedulableReason),
-		SessionWindowStart:      m.SessionWindowStart,
-		SessionWindowEnd:        m.SessionWindowEnd,
-		SessionWindowStatus:     derefString(m.SessionWindowStatus),
+		ID:                         m.ID,
+		Name:                       m.Name,
+		Notes:                      m.Notes,
+		Platform:                   m.Platform,
+		Type:                       m.Type,
+		Credentials:                copyJSONMap(m.Credentials),
+		Extra:                      copyJSONMap(m.Extra),
+		ProxyID:                    m.ProxyID,
+		Concurrency:                m.Concurrency,
+		Priority:                   m.Priority,
+		RateMultiplier:             &rateMultiplier,
+		LoadFactor:                 m.LoadFactor,
+		Status:                     m.Status,
+		ErrorMessage:               derefString(m.ErrorMessage),
+		LastUsedAt:                 m.LastUsedAt,
+		ExpiresAt:                  m.ExpiresAt,
+		AutoPauseOnExpired:         m.AutoPauseOnExpired,
+		CreatedAt:                  m.CreatedAt,
+		UpdatedAt:                  m.UpdatedAt,
+		Schedulable:                m.Schedulable,
+		RateLimitedAt:              m.RateLimitedAt,
+		RateLimitResetAt:           m.RateLimitResetAt,
+		OverloadUntil:              m.OverloadUntil,
+		TempUnschedulableUntil:     m.TempUnschedulableUntil,
+		TempUnschedulableReason:    derefString(m.TempUnschedulableReason),
+		TempUnschedStepIndex:       m.TempUnschedStepIndex,
+		TempUnschedLastRecoveredAt: m.TempUnschedLastRecoveredAt,
+		SessionWindowStart:         m.SessionWindowStart,
+		SessionWindowEnd:           m.SessionWindowEnd,
+		SessionWindowStatus:        derefString(m.SessionWindowStatus),
 	}
 }
 
