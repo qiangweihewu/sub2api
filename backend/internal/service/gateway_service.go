@@ -3961,15 +3961,20 @@ func injectClaudeCodePrompt(body []byte, system any) []byte {
 	return result
 }
 
-// rewriteSystemForNonClaudeCode 将非 Claude Code 客户端的 system prompt 迁移至 messages，
-// system 字段仅保留 Claude Code 标识提示词。
-// Anthropic 基于 system 参数内容检测第三方应用，仅前置追加 Claude Code 提示词
-// 无法通过检测，因为后续内容仍为非 Claude Code 格式。
-// 策略：将原始 system prompt 提取并注入为 user/assistant 消息对，system 仅保留 Claude Code 标识。
+// rewriteSystemForNonClaudeCode 将非 Claude Code 客户端的 system prompt 重写为真实
+// Claude CLI 的 system 结构 —— 一个 array，包含 Claude Code 基础提示词块 + 客户端原始
+// system prompt 作为 append 块（mirrors `claude --append-system-prompt` 的 wire 行为）。
+//
+// 早期版本曾将客户端 system prompt 注入为 `user`/`assistant` 消息对（"[System
+// Instructions] ..." + "Understood. I will follow these instructions."）。这种
+// 结构在真实 Claude CLI 流量中不存在，是 Anthropic 第三方检测的一个强信号；即便
+// header mimic 到位，body 里出现这对假消息，也会被判为 "Third-party apps now draw
+// from your extra usage…"。现改为仅 append 到 system 数组，和真 CLI 的 --append-
+// system-prompt 行为完全一致。
 func rewriteSystemForNonClaudeCode(body []byte, system any) []byte {
 	system = normalizeSystemParam(system)
 
-	// 1. 提取原始 system prompt 文本
+	// 1. 提取原始 system prompt 文本（string 或 array 形式都支持）。
 	var originalSystemText string
 	switch v := system.(type) {
 	case string:
@@ -3986,60 +3991,30 @@ func rewriteSystemForNonClaudeCode(body []byte, system any) []byte {
 		originalSystemText = strings.Join(parts, "\n\n")
 	}
 
-	// 2. 将 system 替换为 Claude Code 标准提示词（array 格式，与真实 Claude Code 一致）
-	//    真实 Claude Code 始终以 [{type: "text", text: "...", cache_control: {type: "ephemeral"}}] 发送 system。
-	//    使用 string 格式会被 Anthropic 检测为第三方应用。
-	//    对于非 CC 客户端（mimic 模式），使用 1h TTL 以获得更高的 prompt cache 命中率。
-	//    （写入成本 2x vs 1.25x，但读取折扣 90% 不变，多轮对话中 ROI 更高）
-	claudeCodeSystemBlock := []map[string]any{
+	// 2. 构造新的 system 数组：第一个块始终是 Claude Code 基础提示词（1h cache），
+	//    如果客户端有独立 system prompt 并且不是 CC 提示词本身，就作为第二个块
+	//    append 上去（5m cache 是真 CLI 在 append 场景的默认 TTL）。
+	blocks := []map[string]any{
 		{
 			"type":          "text",
 			"text":          claudeCodeSystemPrompt,
 			"cache_control": map[string]string{"type": "ephemeral", "ttl": "1h"},
 		},
 	}
-	out, ok := setJSONValueBytes(body, "system", claudeCodeSystemBlock)
+	ccPromptTrimmed := strings.TrimSpace(claudeCodeSystemPrompt)
+	if originalSystemText != "" && originalSystemText != ccPromptTrimmed && !hasClaudeCodePrefix(originalSystemText) {
+		blocks = append(blocks, map[string]any{
+			"type":          "text",
+			"text":          originalSystemText,
+			"cache_control": map[string]string{"type": "ephemeral"},
+		})
+	}
+
+	out, ok := setJSONValueBytes(body, "system", blocks)
 	if !ok {
 		logger.LegacyPrintf("service.gateway", "Warning: failed to set Claude Code system prompt")
 		return body
 	}
-
-	// 3. 将原始 system prompt 作为 user/assistant 消息对注入到 messages 开头
-	//    模型仍通过 messages 接收完整指令，保留客户端功能
-	ccPromptTrimmed := strings.TrimSpace(claudeCodeSystemPrompt)
-	if originalSystemText != "" && originalSystemText != ccPromptTrimmed && !hasClaudeCodePrefix(originalSystemText) {
-		instrMsg, err1 := json.Marshal(map[string]any{
-			"role": "user",
-			"content": []map[string]any{
-				{"type": "text", "text": "[System Instructions]\n" + originalSystemText},
-			},
-		})
-		ackMsg, err2 := json.Marshal(map[string]any{
-			"role": "assistant",
-			"content": []map[string]any{
-				{"type": "text", "text": "Understood. I will follow these instructions."},
-			},
-		})
-		if err1 != nil || err2 != nil {
-			logger.LegacyPrintf("service.gateway", "Warning: failed to marshal system-to-messages injection")
-			return out
-		}
-
-		// 重建 messages 数组：[instruction, ack, ...originalMessages]
-		items := [][]byte{instrMsg, ackMsg}
-		messagesResult := gjson.GetBytes(out, "messages")
-		if messagesResult.IsArray() {
-			messagesResult.ForEach(func(_, msg gjson.Result) bool {
-				items = append(items, []byte(msg.Raw))
-				return true
-			})
-		}
-
-		if next, setOk := setJSONRawBytes(out, "messages", buildJSONArrayRaw(items)); setOk {
-			out = next
-		}
-	}
-
 	return out
 }
 

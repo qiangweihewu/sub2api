@@ -762,15 +762,22 @@ func TestGatewayService_AnthropicOAuth_ForwardPreservesBillingHeaderSystemBlock(
 			system := gjson.GetBytes(upstream.lastBody, "system")
 			require.True(t, system.Exists())
 			require.True(t, system.IsArray(), "system should be an array")
-			require.Equal(t, claudeCodeSystemPrompt, system.Array()[0].Get("text").String())
-			require.Equal(t, "ephemeral", system.Array()[0].Get("cache_control.type").String())
+			systemArr := system.Array()
+			require.GreaterOrEqual(t, len(systemArr), 1)
+			require.Equal(t, claudeCodeSystemPrompt, systemArr[0].Get("text").String())
+			require.Equal(t, "ephemeral", systemArr[0].Get("cache_control.type").String())
 
-			// 原始 system prompt 应迁移至 messages 中
+			// v0.1.119+: 客户端原始 system prompt 作为第二个 block append 到 system 数组
+			// 不再注入假的 user/assistant 消息对（那是 Anthropic 第三方检测的强信号）
+			require.Len(t, systemArr, 2, "append block should be present when client sent system prompt")
+			require.Contains(t, systemArr[1].Get("text").String(), "x-anthropic-billing-header keep")
+			require.Equal(t, "ephemeral", systemArr[1].Get("cache_control.type").String())
+
+			// messages 不应被修改（仅保留客户端原始消息）
 			messages := gjson.GetBytes(upstream.lastBody, "messages")
 			require.True(t, messages.IsArray())
-			firstMsg := messages.Array()[0]
-			require.Equal(t, "user", firstMsg.Get("role").String())
-			require.Contains(t, firstMsg.Get("content.0.text").String(), "x-anthropic-billing-header keep")
+			require.Len(t, messages.Array(), 1, "messages must not be mutated by system rewrite")
+			require.Equal(t, "user", messages.Array()[0].Get("role").String())
 		})
 	}
 }
