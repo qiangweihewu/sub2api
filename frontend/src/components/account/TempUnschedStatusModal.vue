@@ -91,6 +91,17 @@
               {{ ruleIndexDisplay }}
             </p>
           </div>
+          <div
+            v-if="account?.temp_unsched_step_index != null"
+            class="rounded-lg border border-gray-200 p-3 dark:border-dark-600"
+          >
+            <p class="text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.tempUnschedulable.stepIndex') }}
+            </p>
+            <p class="mt-1 text-sm font-medium text-gray-900 dark:text-gray-100">
+              {{ account.temp_unsched_step_index + 1 }}
+            </p>
+          </div>
         </div>
 
         <div class="rounded-lg border border-gray-200 p-3 dark:border-dark-600">

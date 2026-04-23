@@ -26,6 +26,13 @@
       <span v-else :class="['badge text-xs', statusClass]">
         {{ statusText }}
       </span>
+      <!-- Step Index Display (连续触发次数) -->
+      <span
+        v-if="isTempUnschedulable && account.temp_unsched_step_index != null"
+        class="text-xs text-gray-500 dark:text-gray-400 ml-1"
+      >
+        (连续触发 {{ account.temp_unsched_step_index + 1 }} 次)
+      </span>
     </template>
 
     <!-- Error Info Indicator -->

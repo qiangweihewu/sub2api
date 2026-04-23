@@ -768,6 +768,7 @@ export interface Account {
   overload_until: string | null
   temp_unschedulable_until: string | null
   temp_unschedulable_reason: string | null
+  temp_unsched_step_index?: number | null
 
   // Session window fields (5-hour window)
   session_window_start: string | null
