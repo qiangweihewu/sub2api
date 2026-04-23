@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -1495,16 +1496,36 @@ func matchTempUnschedKeyword(bodyLower string, keywords []string) string {
 	return ""
 }
 
-func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account *Account, rule TempUnschedulableRule, ruleIndex int, statusCode int, matchedKeyword string, responseBody []byte) bool {
+// triggerTempUnschedulableWithBackoff is the single write path for
+// temp-unschedulable triggers that participate in the global exponential
+// backoff. Reads the account's current streak state, picks the next
+// duration, writes until/reason/step_index atomically, and invalidates
+// the cache.
+//
+// Callers provide a short identifier (matchedKeyword), a human-readable
+// baseReason, and an optional ruleIndex (pass -1 for non-rule callers).
+// Both are embedded into a TempUnschedState JSON that becomes the
+// account's temp_unschedulable_reason for auditability.
+func (s *RateLimitService) triggerTempUnschedulableWithBackoff(
+	ctx context.Context,
+	account *Account,
+	statusCode int,
+	matchedKeyword string,
+	baseReason string,
+	responseBody []byte,
+	ruleIndex int,
+) bool {
 	if account == nil {
-		return false
-	}
-	if rule.DurationMinutes <= 0 {
 		return false
 	}
 
 	now := time.Now()
-	until := now.Add(time.Duration(rule.DurationMinutes) * time.Minute)
+	duration, nextStep := computeNextTempUnschedDuration(
+		account.TempUnschedStepIndex,
+		account.TempUnschedLastRecoveredAt,
+		now,
+	)
+	until := now.Add(duration)
 
 	state := &TempUnschedState{
 		UntilUnix:       until.Unix(),
@@ -1514,28 +1535,54 @@ func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account
 		RuleIndex:       ruleIndex,
 		ErrorMessage:    truncateTempUnschedMessage(responseBody, tempUnschedMessageMaxBytes),
 	}
+	if state.ErrorMessage == "" && baseReason != "" {
+		state.ErrorMessage = baseReason
+	}
 
 	reason := ""
 	if raw, err := json.Marshal(state); err == nil {
 		reason = string(raw)
 	}
 	if reason == "" {
-		reason = strings.TrimSpace(state.ErrorMessage)
+		reason = baseReason
 	}
 
-	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, reason); err != nil {
-		slog.Warn("temp_unsched_set_failed", "account_id", account.ID, "error", err)
+	if err := s.accountRepo.SetTempUnschedulableWithStep(ctx, account.ID, until, reason, nextStep); err != nil {
+		slog.Warn("temp_unsched_backoff_set_failed",
+			"account_id", account.ID, "step", nextStep, "error", err)
 		return false
 	}
 
 	if s.tempUnschedCache != nil {
 		if err := s.tempUnschedCache.SetTempUnsched(ctx, account.ID, state); err != nil {
-			slog.Warn("temp_unsched_cache_set_failed", "account_id", account.ID, "error", err)
+			slog.Warn("temp_unsched_backoff_cache_set_failed",
+				"account_id", account.ID, "error", err)
 		}
 	}
 
-	slog.Info("account_temp_unschedulable", "account_id", account.ID, "until", until, "rule_index", ruleIndex, "status_code", statusCode)
+	slog.Info("account_temp_unschedulable_backoff",
+		"account_id", account.ID,
+		"until", until,
+		"step", nextStep,
+		"duration_minutes", int(duration.Minutes()),
+		"status_code", statusCode,
+		"reason", baseReason,
+	)
 	return true
+}
+
+func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account *Account, rule TempUnschedulableRule, ruleIndex int, statusCode int, matchedKeyword string, responseBody []byte) bool {
+	if account == nil {
+		return false
+	}
+	if rule.DurationMinutes <= 0 {
+		return false
+	}
+	baseReason := rule.Description
+	if baseReason == "" {
+		baseReason = fmt.Sprintf("rule #%d matched (status=%d keyword=%q)", ruleIndex, statusCode, matchedKeyword)
+	}
+	return s.triggerTempUnschedulableWithBackoff(ctx, account, statusCode, matchedKeyword, baseReason, responseBody, ruleIndex)
 }
 
 func truncateTempUnschedMessage(body []byte, maxBytes int) string {
