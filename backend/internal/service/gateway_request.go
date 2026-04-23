@@ -1180,3 +1180,36 @@ func RectifyThinkingBudget(body []byte) ([]byte, bool) {
 
 	return modified, changed
 }
+
+// stripThirdPartyBodyFields removes request-body fields that the real Claude
+// CLI never emits on the OAuth path, so that when sub2api is mimicking CLI
+// fingerprints, the body stays consistent with the headers.
+//
+// Background: third-party clients like OpenClaw (see OpenClaw
+// extensions/anthropic/stream-wrappers.ts:145-168) inject these fields when
+// they believe they're talking to a commercial-API-key endpoint. Forwarding
+// them on an OAuth account with mimicked CLI headers produces an
+// inconsistent fingerprint — Anthropic's third-party detector responds with
+// 400 "Third-party apps now draw from your extra usage…" even on accounts
+// that have plenty of remaining quota. Accounts then loop through retries
+// and land in backoff state, exhausting the pool from the inside.
+//
+// Currently stripped:
+//   - service_tier — commercial-API-key billing knob; CLI does not send it.
+//
+// Returns the (possibly modified) body plus a changed flag. On any parse
+// failure, returns the input unchanged.
+func stripThirdPartyBodyFields(body []byte) ([]byte, bool) {
+	if len(body) == 0 {
+		return body, false
+	}
+	changed := false
+	modified := body
+	if gjson.GetBytes(modified, "service_tier").Exists() {
+		if cleaned, err := sjson.DeleteBytes(modified, "service_tier"); err == nil {
+			modified = cleaned
+			changed = true
+		}
+	}
+	return modified, changed
+}

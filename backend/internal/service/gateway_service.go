@@ -5843,6 +5843,16 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		body = signBillingHeaderCCH(body)
 	}
 
+	// Strip body fields that real Claude CLI never sends on the OAuth path.
+	// See stripThirdPartyBodyFields docstring for the rationale.
+	if mimicClaudeCode {
+		if cleaned, changed := stripThirdPartyBodyFields(body); changed {
+			body = cleaned
+			logger.LegacyPrintf("service.gateway",
+				"Account %d: stripped third-party body fields before OAuth/mimic forward", account.ID)
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
