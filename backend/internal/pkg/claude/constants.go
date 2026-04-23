@@ -45,20 +45,36 @@ const APIKeyBetaHeader = BetaClaudeCode + "," + BetaInterleavedThinking + "," + 
 const APIKeyHaikuBetaHeader = BetaInterleavedThinking
 
 // DefaultHeaders 是 Claude Code 客户端默认请求头。
+//
+// Sync against real Claude CLI traffic so Anthropic does not reject OAuth
+// requests as "non-CLI" third-party usage. See docs/superpowers/plans/
+// 2026-04-23-claude-code-mimic-refresh.md for the audit that motivated
+// the current values.
+//
+// Reference capture: Claude Code CLI 2.1.17 on 2026-01-25 (external):
+//
+//	X-Stainless-Runtime-Version: v20.19.5
+//	X-Stainless-Package-Version: 0.70.0
+//	X-Stainless-Os:              MacOS
+//
+// Rules of thumb:
+//   - Runtime-Version must be a real Node LTS the bundled CLI ships
+//     (20/22 at time of writing — NEVER an odd-numbered "current" release
+//     like v23/v25; those mark the request as "clearly not the bundled CLI").
+//   - Package-Version should track @anthropic-ai/sdk's actual npm releases.
+//   - Do NOT send Anthropic-Dangerous-Direct-Browser-Access — that header
+//     is for browser-origin SDK use; the CLI does not emit it.
 var DefaultHeaders = map[string]string{
-	// Keep these in sync with recent Claude CLI traffic to reduce the chance
-	// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
-	"User-Agent":                                "claude-cli/2.1.116 (external, cli)",
-	"X-Stainless-Lang":                          "js",
-	"X-Stainless-Package-Version":               "0.90.0",
-	"X-Stainless-OS":                            "Linux",
-	"X-Stainless-Arch":                          "arm64",
-	"X-Stainless-Runtime":                       "node",
-	"X-Stainless-Runtime-Version":               "v25.1.0",
-	"X-Stainless-Retry-Count":                   "0",
-	"X-Stainless-Timeout":                       "600",
-	"X-App":                                     "cli",
-	"Anthropic-Dangerous-Direct-Browser-Access": "true",
+	"User-Agent":                  "claude-cli/2.1.116 (external, cli)",
+	"X-Stainless-Lang":            "js",
+	"X-Stainless-Package-Version": "0.70.0",
+	"X-Stainless-OS":              "Linux",
+	"X-Stainless-Arch":            "arm64",
+	"X-Stainless-Runtime":         "node",
+	"X-Stainless-Runtime-Version": "v22.11.0",
+	"X-Stainless-Retry-Count":     "0",
+	"X-Stainless-Timeout":         "600",
+	"X-App":                       "cli",
 }
 
 // Model 表示一个 Claude 模型
