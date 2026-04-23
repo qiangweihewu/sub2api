@@ -361,9 +361,12 @@ var allowedHeaders = map[string]bool{
 	"x-stainless-runtime":                       true,
 	"x-stainless-runtime-version":               true,
 	"x-stainless-helper-method":                 true,
-	"anthropic-dangerous-direct-browser-access": true,
-	"anthropic-version":                         true,
-	"x-app":                                     true,
+	// Intentionally NOT whitelisted: anthropic-dangerous-direct-browser-access.
+	// That header is for browser-origin SDK use; the real Claude Code CLI does
+	// not emit it, so leaking it from a third-party client would mark the
+	// request as non-CLI at Anthropic's detector.
+	"anthropic-version": true,
+	"x-app":             true,
 	"anthropic-beta":                            true,
 	"accept-language":                           true,
 	"sec-fetch-mode":                            true,
