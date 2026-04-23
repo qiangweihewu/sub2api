@@ -622,6 +622,131 @@ func FilterThinkingBlocksForRetry(body []byte) []byte {
 	return out
 }
 
+// isLikelyValidSignature reports whether s looks like a non-trivial base64
+// signature (what Anthropic mints for thinking blocks). We don't verify
+// cryptographically — just filter out obviously broken payloads so the
+// upstream doesn't 400 with `Invalid signature in thinking block`.
+func isLikelyValidSignature(s string) bool {
+	if len(s) < 8 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') ||
+			c == '+' || c == '/' || c == '=' || c == '-' || c == '_' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// FilterInvalidSignatureThinkingBlocks removes assistant-message content
+// blocks that would cause an upstream 400 `Invalid signature in thinking
+// block` error:
+//
+//   - `type: "thinking"` with missing, empty, or malformed signature
+//   - `type: "redacted_thinking"` (we can't validate these — always remove)
+//
+// Valid thinking blocks are preserved verbatim. Non-thinking content and
+// non-assistant messages are untouched. Assistant messages left with no
+// content blocks after filtering are dropped entirely (Anthropic rejects
+// empty content arrays).
+//
+// Fail-safe: on any parse error, returns the original body unchanged.
+//
+// Intended to run on every initial forward to an Anthropic-compatible
+// upstream (behind the same IsSignatureRectifierEnabled toggle as the
+// existing retry-path rectifier).
+func FilterInvalidSignatureThinkingBlocks(body []byte) []byte {
+	// Fast path: no thinking/redacted_thinking markers at all.
+	if !bytes.Contains(body, patternTypeThinking) &&
+		!bytes.Contains(body, patternTypeThinkingSpaced) &&
+		!bytes.Contains(body, patternTypeRedactedThinking) &&
+		!bytes.Contains(body, patternTypeRedactedSpaced) {
+		return body
+	}
+	if !gjson.ValidBytes(body) {
+		return body
+	}
+
+	jsonStr := *(*string)(unsafe.Pointer(&body))
+	msgsRes := gjson.Get(jsonStr, "messages")
+	if !msgsRes.Exists() || !msgsRes.IsArray() {
+		return body
+	}
+
+	type filteredMsg struct {
+		Role    string          `json:"role"`
+		Content json.RawMessage `json:"content"`
+	}
+
+	anyChange := false
+	outMessages := make([]json.RawMessage, 0, len(msgsRes.Array()))
+	for _, msg := range msgsRes.Array() {
+		role := msg.Get("role").String()
+		content := msg.Get("content")
+		if role != "assistant" || !content.IsArray() {
+			outMessages = append(outMessages, json.RawMessage(msg.Raw))
+			continue
+		}
+
+		kept := make([]json.RawMessage, 0, len(content.Array()))
+		changed := false
+		for _, block := range content.Array() {
+			blockType := block.Get("type").String()
+			switch blockType {
+			case "thinking":
+				sig := block.Get("signature").String()
+				if isLikelyValidSignature(sig) {
+					kept = append(kept, json.RawMessage(block.Raw))
+				} else {
+					changed = true
+				}
+			case "redacted_thinking":
+				changed = true // always drop
+			default:
+				kept = append(kept, json.RawMessage(block.Raw))
+			}
+		}
+
+		if !changed {
+			outMessages = append(outMessages, json.RawMessage(msg.Raw))
+			continue
+		}
+
+		anyChange = true
+		// Drop empty assistant messages to avoid Anthropic's
+		// "content must not be empty" error.
+		if len(kept) == 0 {
+			continue
+		}
+		newContent, err := json.Marshal(kept)
+		if err != nil {
+			return body // fail-safe
+		}
+		newMsg, err := json.Marshal(filteredMsg{Role: role, Content: newContent})
+		if err != nil {
+			return body
+		}
+		outMessages = append(outMessages, newMsg)
+	}
+
+	if !anyChange {
+		return body
+	}
+
+	newMsgsBytes, err := json.Marshal(outMessages)
+	if err != nil {
+		return body
+	}
+	out, err := sjson.SetRawBytes(body, "messages", newMsgsBytes)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
 // removeThinkingDependentContextStrategies 从 context_management.edits 中移除
 // 需要 thinking 启用的策略（如 clear_thinking_20251015）。
 // 当顶层 "thinking" 字段被禁用时必须调用，否则上游会返回
