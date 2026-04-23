@@ -4317,6 +4317,16 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	// Pre-filter: strip empty text blocks (including nested in tool_result) to prevent upstream 400.
 	body = StripEmptyTextBlocks(body)
 
+	// Preemptively strip thinking blocks that would cause upstream 400
+	// `Invalid signature in thinking block`. Gated by the same toggle that
+	// governs the retry-path rectifier.
+	if s.shouldPreemptivelyFilterThinkingBlocks(ctx, account) {
+		if filtered := FilterInvalidSignatureThinkingBlocks(body); len(filtered) != len(body) || !bytes.Equal(filtered, body) {
+			logger.LegacyPrintf("service.gateway", "Account %d: preemptively filtered invalid-signature thinking blocks from initial forward", account.ID)
+			body = filtered
+		}
+	}
+
 	// 重试间复用同一请求体，避免每次 string(body) 产生额外分配。
 	setOpsUpstreamRequestBody(c, body)
 
@@ -4397,6 +4407,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					// 避免在重试预算已耗尽时再发起额外请求
 					if time.Since(retryStart) >= maxRetryElapsed {
 						resp.Body = io.NopCloser(bytes.NewReader(respBody))
+						// Budget exhausted; can't retry signature error.
+						if s.rateLimitService != nil {
+							s.rateLimitService.TriggerThinkingSignatureUnsched(ctx, account, respBody)
+						}
 						break
 					}
 					logger.LegacyPrintf("service.gateway", "[warn] Account %d: thinking blocks have invalid signature, retrying with filtered blocks", account.ID)
@@ -4476,6 +4490,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 								Header:     retryResp.Header.Clone(),
 								Body:       io.NopCloser(bytes.NewReader(retryRespBody)),
 							}
+							// Retry chain exhausted with signature error still present.
+							if s.rateLimitService != nil && retryResp.StatusCode == 400 {
+								s.rateLimitService.TriggerThinkingSignatureUnsched(ctx, account, retryRespBody)
+							}
 							break
 						}
 						if retryResp != nil && retryResp.Body != nil {
@@ -4488,6 +4506,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 					// Retry failed: restore original response body and continue handling.
 					resp.Body = io.NopCloser(bytes.NewReader(respBody))
+					// Retry chain exhausted; original 400 signature error still stands.
+					if s.rateLimitService != nil {
+						s.rateLimitService.TriggerThinkingSignatureUnsched(ctx, account, respBody)
+					}
 					break
 				}
 				// 不是签名错误（或整流器已关闭），继续检查 budget 约束
@@ -6382,6 +6404,16 @@ func (s *GatewayService) shouldRectifySignatureError(ctx context.Context, accoun
 	}
 	// OAuth/SetupToken/Upstream/Bedrock 等：保持原有行为（内置模式 + 原开关）
 	return s.isThinkingBlockSignatureError(respBody) && s.settingService.IsSignatureRectifierEnabled(ctx)
+}
+
+// shouldPreemptivelyFilterThinkingBlocks returns true when the preemptive
+// thinking-signature filter should run on the initial forward. Uses the
+// same toggle as the retry-path rectifier.
+func (s *GatewayService) shouldPreemptivelyFilterThinkingBlocks(ctx context.Context, account *Account) bool {
+	if account == nil || s.settingService == nil {
+		return false
+	}
+	return s.settingService.IsSignatureRectifierEnabled(ctx)
 }
 
 // isSignatureErrorPattern 仅做模式匹配，不检查开关。
@@ -8541,7 +8573,9 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	// 检测 thinking block 签名错误（400）并重试一次（过滤 thinking blocks）
+	signatureRetryAttempted := false
 	if resp.StatusCode == 400 && s.shouldRectifySignatureError(ctx, account, respBody) {
+		signatureRetryAttempted = true
 		logger.LegacyPrintf("service.gateway", "Account %d: detected thinking block signature error on count_tokens, retrying with filtered thinking blocks", account.ID)
 
 		filteredBody := FilterThinkingBlocksForRetry(body)
@@ -8560,6 +8594,12 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 				}
 			}
 		}
+	}
+
+	// Retry chain exhausted on count_tokens path: if the signature retry was
+	// attempted but we're still stuck on a 400, mark the account temp-unschedulable.
+	if signatureRetryAttempted && resp.StatusCode == 400 && s.rateLimitService != nil {
+		s.rateLimitService.TriggerThinkingSignatureUnsched(ctx, account, respBody)
 	}
 
 	// 处理错误响应

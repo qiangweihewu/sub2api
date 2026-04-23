@@ -1582,6 +1582,15 @@ func (s *RateLimitService) triggerTempUnschedulableWithBackoff(
 	return true
 }
 
+// TriggerThinkingSignatureUnsched marks an account temp-unschedulable
+// because the thinking-signature retry chain (strip → tool-downgrade)
+// still failed. The calling request's client still gets the error, but
+// the next request will failover to another account.
+func (s *RateLimitService) TriggerThinkingSignatureUnsched(ctx context.Context, account *Account, respBody []byte) bool {
+	return s.triggerTempUnschedulableWithBackoff(ctx, account, 400,
+		"thinking signature", "thinking signature retry exhausted", respBody, -1)
+}
+
 func (s *RateLimitService) triggerTempUnschedulable(ctx context.Context, account *Account, rule TempUnschedulableRule, ruleIndex int, statusCode int, matchedKeyword string, responseBody []byte) bool {
 	if account == nil {
 		return false
