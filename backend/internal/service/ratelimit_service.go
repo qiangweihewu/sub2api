@@ -1332,6 +1332,30 @@ func hasNonEmptyMapValue(extra map[string]any, key string) bool {
 	}
 }
 
+// ensureRecoveredStamped records when the most recent temp-unsched window
+// naturally expired, so computeNextTempUnschedDuration can detect a fresh
+// start on the next trigger. Idempotent — the underlying repo method
+// guards against clobbering a larger timestamp. Fire-and-forget: a stamp
+// failure is logged but not propagated.
+func (s *RateLimitService) ensureRecoveredStamped(ctx context.Context, account *Account) {
+	if account == nil || account.TempUnschedulableUntil == nil {
+		return
+	}
+	expiry := *account.TempUnschedulableUntil
+	now := time.Now()
+	if !expiry.Before(now) {
+		return // still active — not recovered
+	}
+	// Already stamped at-or-after this expiry → nothing to do.
+	if account.TempUnschedLastRecoveredAt != nil && !account.TempUnschedLastRecoveredAt.Before(expiry) {
+		return
+	}
+	if err := s.accountRepo.StampTempUnschedRecovered(ctx, account.ID, expiry); err != nil {
+		slog.Warn("temp_unsched_stamp_recovered_failed",
+			"account_id", account.ID, "error", err)
+	}
+}
+
 func (s *RateLimitService) GetTempUnschedStatus(ctx context.Context, accountID int64) (*TempUnschedState, error) {
 	now := time.Now().Unix()
 	if s.tempUnschedCache != nil {
@@ -1352,6 +1376,9 @@ func (s *RateLimitService) GetTempUnschedStatus(ctx context.Context, accountID i
 		return nil, nil
 	}
 	if account.TempUnschedulableUntil.Unix() <= now {
+		// Window has naturally expired — record the recovery timestamp so the
+		// next trigger's backoff can detect a fresh-start streak.
+		s.ensureRecoveredStamped(ctx, account)
 		return nil, nil
 	}
 
