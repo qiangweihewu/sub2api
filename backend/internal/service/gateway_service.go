@@ -521,9 +521,9 @@ func (s *GatewayService) TempUnscheduleRetryableError(ctx context.Context, accou
 	// 根据状态码选择封禁策略
 	switch failoverErr.StatusCode {
 	case http.StatusBadRequest:
-		tempUnscheduleGoogleConfigError(ctx, s.accountRepo, accountID, "[handler]")
+		tempUnscheduleGoogleConfigError(ctx, s.rateLimitService, s.accountRepo, accountID, "[handler]")
 	case http.StatusBadGateway:
-		tempUnscheduleEmptyResponse(ctx, s.accountRepo, accountID, "[handler]")
+		tempUnscheduleEmptyResponse(ctx, s.rateLimitService, s.accountRepo, accountID, "[handler]")
 	}
 }
 

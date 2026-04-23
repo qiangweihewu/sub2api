@@ -662,37 +662,21 @@ func (s *RateLimitService) handleAuthError(ctx context.Context, account *Account
 	slog.Warn("account_disabled_auth_error", "account_id", account.ID, "error", errorMsg)
 }
 
-// extraUsageDefaultCooldownMinutes 是 "Extra usage required" 的默认冷却时长。
-// Anthropic 的"第三方认定"通常基于滑动窗口（观察到 5h 量级），60 分钟是一个
-// 较平衡的起点：既不会太早重试撞墙，也不会永久烧掉账号。
-const extraUsageDefaultCooldownMinutes = 60
-
 // handleExtraUsage 处理 "Extra usage required" 错误。Anthropic 对 OAuth 账号
 // 的"第三方应用"识别多为临时性（启发式 + 滑动窗口），永久禁用会烧光账号池。
-// 标记为临时不可调度，冷却结束后由刷新服务重新拾取。
+// 标记为临时不可调度，冷却结束后由刷新服务重新拾取。走全局指数退避 wrapper
+// ([1,5,15,30,60]m)；5 分钟内无触发则从头开始。
 // 返回 true 表示调用方应触发 failover 到其他账号。
 func (s *RateLimitService) handleExtraUsage(ctx context.Context, account *Account, errorMsg string) bool {
-	cooldownMinutes := 0
-	if s.cfg != nil {
-		cooldownMinutes = s.cfg.RateLimit.ExtraUsageCooldownMinutes
+	baseReason := "extra usage required"
+	if msg := strings.TrimSpace(errorMsg); msg != "" {
+		baseReason = "extra usage: " + msg
 	}
-	if cooldownMinutes <= 0 {
-		cooldownMinutes = extraUsageDefaultCooldownMinutes
-	}
-	until := time.Now().Add(time.Duration(cooldownMinutes) * time.Minute)
-	if err := s.accountRepo.SetTempUnschedulable(ctx, account.ID, until, errorMsg); err != nil {
-		slog.Warn("extra_usage_set_temp_unschedulable_failed",
-			"account_id", account.ID, "error", err)
-		// Fall back to SetError so account is at least stopped from further
-		// requests rather than keep looping on "Extra usage" rejections.
+	if ok := s.triggerTempUnschedulableWithBackoff(ctx, account, 400, "extra usage", baseReason, []byte(errorMsg), -1); !ok {
+		// Wrapper 内部已记录日志；此处只在失败时兜底 SetError，避免账号在"Extra usage"
+		// 拒绝上循环。
 		s.handleAuthError(ctx, account, errorMsg)
-		return true
 	}
-	slog.Warn("account_temp_unschedulable_extra_usage",
-		"account_id", account.ID,
-		"cooldown_minutes", cooldownMinutes,
-		"until", until.Format(time.RFC3339),
-		"error", errorMsg)
 	return true
 }
 
