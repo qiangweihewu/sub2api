@@ -72,37 +72,62 @@ func NewIdentityService(cache IdentityCache) *IdentityService {
 }
 
 // GetOrCreateFingerprint 获取或创建账号的指纹
-// 如果缓存存在，检测user-agent版本，新版本则更新
-// 如果缓存不存在，生成随机ClientID并从请求头创建指纹，然后缓存
+//
+// UA 白名单策略 (v0.1.127+): 只有 User-Agent 以 `claude-cli/X.Y.Z` 开头的请求
+// 才会读写每账号 fingerprint 缓存。非 CC 客户端 (OpenClaw / ai-sdk / OpenAI SDK 等)
+// 每次都现拿 defaultFingerprint 的副本,不读不写共享 Redis,避免跨客户端污染
+// (2026-04 实测: OpenClaw UA=OpenAI/JS 会把共享账号的 fingerprint 缓存改成
+// OpenAI SDK 指纹,导致真 Claude Code CLI 请求也带着 OpenAI/JS 头上游,触发
+// Anthropic Third-party detection 拒绝)。
+//
+// 对真 CC 客户端:
+//   - 缓存存在且 UA 仍是 claude-cli → 走原升级合并逻辑
+//   - 缓存存在但 UA 被污染 (非 claude-cli) → 丢弃并重建
+//   - 缓存不存在 → 从当前请求头创建并落盘
 func (s *IdentityService) GetOrCreateFingerprint(ctx context.Context, accountID int64, headers http.Header) (*Fingerprint, error) {
+	clientUA := headers.Get("User-Agent")
+
+	// 非 claude-cli 客户端: 每次返回 defaultFingerprint 副本 (带随机 ClientID),
+	// 不读不写共享缓存,防止跨客户端污染。
+	if !claudeCliUserAgentRe.MatchString(clientUA) {
+		fp := defaultFingerprint
+		fp.ClientID = generateClientID()
+		fp.UpdatedAt = time.Now().Unix()
+		return &fp, nil
+	}
+
 	// 尝试从缓存获取指纹
 	cached, err := s.cache.GetFingerprint(ctx, accountID)
 	if err == nil && cached != nil {
-		needWrite := false
-
-		// 检查客户端的user-agent是否是更新版本
-		clientUA := headers.Get("User-Agent")
-		if clientUA != "" && isNewerVersion(clientUA, cached.UserAgent) {
-			// 版本升级：merge 语义 — 仅更新请求中实际携带的字段，保留缓存值
-			// 避免缺失的头被硬编码默认值覆盖（如新 CLI 版本 + 旧 SDK 默认值的不一致）
-			mergeHeadersIntoFingerprint(cached, headers)
-			needWrite = true
-			logger.LegacyPrintf("service.identity", "Updated fingerprint for account %d: %s (merge update)", accountID, clientUA)
-		} else if time.Since(time.Unix(cached.UpdatedAt, 0)) > 24*time.Hour {
-			// 距上次写入超过24小时，续期TTL
-			needWrite = true
-		}
-
-		if needWrite {
-			cached.UpdatedAt = time.Now().Unix()
-			if err := s.cache.SetFingerprint(ctx, accountID, cached); err != nil {
-				logger.LegacyPrintf("service.identity", "Warning: failed to refresh fingerprint for account %d: %v", accountID, err)
+		// 缓存 UA 是否也是真 CC?不是说明这份缓存是被污染的历史残留 (v0.1.127 之前
+		// 的旧数据),直接丢弃并重建。
+		if !claudeCliUserAgentRe.MatchString(cached.UserAgent) {
+			logger.LegacyPrintf("service.identity",
+				"Discarding polluted fingerprint for account %d (cached UA=%q, not claude-cli)",
+				accountID, cached.UserAgent)
+		} else {
+			needWrite := false
+			if isNewerVersion(clientUA, cached.UserAgent) {
+				// 版本升级：merge 语义 — 仅更新请求中实际携带的字段，保留缓存值
+				mergeHeadersIntoFingerprint(cached, headers)
+				needWrite = true
+				logger.LegacyPrintf("service.identity", "Updated fingerprint for account %d: %s (merge update)", accountID, clientUA)
+			} else if time.Since(time.Unix(cached.UpdatedAt, 0)) > 24*time.Hour {
+				// 距上次写入超过24小时，续期TTL
+				needWrite = true
 			}
+
+			if needWrite {
+				cached.UpdatedAt = time.Now().Unix()
+				if err := s.cache.SetFingerprint(ctx, accountID, cached); err != nil {
+					logger.LegacyPrintf("service.identity", "Warning: failed to refresh fingerprint for account %d: %v", accountID, err)
+				}
+			}
+			return cached, nil
 		}
-		return cached, nil
 	}
 
-	// 缓存不存在或解析失败，创建新指纹
+	// 缓存不存在、解析失败或已丢弃污染数据，从当前请求头创建新指纹
 	fp := s.createFingerprintFromHeaders(headers)
 
 	// 生成随机ClientID

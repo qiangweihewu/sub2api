@@ -4267,6 +4267,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			systemRewritten = true
 		}
 
+		// Scrub 第三方客户端指纹：零宽空格混淆敏感词 + 剥离 [System Instructions]/XML
+		// 编排标签 + 工具名 TitleCase 映射。ScrubThirdPartyBody 的 remap 表暂不使用
+		// （响应反向映射未实装），客户端会看到 TitleCase 工具名。
+		body, _ = ScrubThirdPartyBody(body)
+
 		// system 被重写时保留 CC prompt 的 cache_control: ephemeral（匹配真实 Claude Code 行为）；
 		// 未重写时（haiku / 已含 CC 前缀）剥离客户端 cache_control，与原有行为一致。
 		// 两种情况下 enforceCacheControlLimit 都会兜底处理上限。
@@ -6404,24 +6409,38 @@ func buildBetaTokenSet(tokens []string) map[string]struct{} {
 
 var defaultDroppedBetasSet = buildBetaTokenSet(claude.DroppedBetas)
 
-// applyClaudeCodeMimicHeaders forces "Claude Code-like" request headers.
-// This mirrors opencode-anthropic-auth behavior: do not trust downstream
-// headers when using Claude Code-scoped OAuth credentials.
+// applyClaudeCodeMimicHeaders fills missing Claude Code-style headers.
+//
+// 语义 (v0.1.127+): "fill-missing only" — 对每个 claude.DefaultHeaders 键,仅当
+// 请求上还没有该头时才写入硬编码 fallback 值。
+//
+// 之所以不覆盖:调用点 (buildUpstreamRequest) 先走 ApplyFingerprint,把 per-account
+// 缓存的真实 Claude Code 指纹 (UA=claude-cli/2.1.118 等当前值) 写到 req。然后这里
+// 用硬编码 claude.DefaultHeaders (停留在 claude-cli/2.1.116 + Package 0.70.0 +
+// Runtime v22.11.0) 强覆盖 → 上游看到的是过时指纹 → Anthropic 判第三方 → 400。
+//
+// 正确顺序是让 cached fingerprint 胜出;本函数只填 cache 没覆盖到的空位
+// (或完全 cache-miss 时整体兜底)。
 func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool) {
 	if req == nil {
 		return
 	}
-	// Start with the standard defaults (fill missing).
+	// 先填通用 OAuth 默认头 (同样遵循 fill-missing 语义)
 	applyClaudeOAuthHeaderDefaults(req)
-	// Then force key headers to match Claude Code fingerprint regardless of what the client sent.
-	// 使用 resolveWireCasing 确保 key 与真实 wire format 一致（如 "x-app" 而非 "X-App"）
+	// 对每个 DefaultHeaders 键,仅当缺失时才写入。ApplyFingerprint 已经用 cached
+	// 真实值填过的不要动。
 	for key, value := range claude.DefaultHeaders {
 		if value == "" {
 			continue
 		}
-		setHeaderRaw(req.Header, resolveWireCasing(key), value)
+		wireKey := resolveWireCasing(key)
+		if getHeaderRaw(req.Header, wireKey) != "" {
+			continue
+		}
+		setHeaderRaw(req.Header, wireKey, value)
 	}
 	// Real Claude CLI uses Accept: application/json (even for streaming).
+	// 这两个不走 cache,直接强制设置是安全的。
 	setHeaderRaw(req.Header, "Accept", "application/json")
 	if isStream {
 		setHeaderRaw(req.Header, "x-stainless-helper-method", "stream")

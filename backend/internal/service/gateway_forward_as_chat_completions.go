@@ -112,6 +112,10 @@ func (s *GatewayService) ForwardAsChatCompletions(
 			systemRewritten = true
 		}
 
+		// Scrub 第三方客户端指纹：零宽空格 + marker 剥离 + 工具名 TitleCase。
+		// remap 表暂不使用，响应反向映射留到后续 PR。
+		anthropicBody, _ = ScrubThirdPartyBody(anthropicBody)
+
 		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: !systemRewritten}
 		if s.identityService != nil {
 			fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
