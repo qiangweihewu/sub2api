@@ -1211,5 +1211,101 @@ func stripThirdPartyBodyFields(body []byte) ([]byte, bool) {
 			changed = true
 		}
 	}
+	if next, toolsCleaned := stripOpenAIToolSchemaArtifacts(modified); toolsCleaned {
+		modified = next
+		changed = true
+	}
+	return modified, changed
+}
+
+// openaiSchemaArtifacts are JSON Schema fields injected by the OpenAI SDK
+// (strict mode, Zod schema generators, etc.) that real Claude Code tools
+// never include. Their presence in the tools[].input_schema is a
+// fingerprint for non-CLI traffic.
+var openaiSchemaArtifacts = map[string]struct{}{
+	"$schema":              {},
+	"$id":                  {},
+	"$ref":                 {},
+	"additionalProperties": {},
+}
+
+// stripOpenAIToolSchemaArtifacts removes OpenAI SDK artifacts from every
+// tool's input_schema in the request body.
+func stripOpenAIToolSchemaArtifacts(body []byte) ([]byte, bool) {
+	tools := gjson.GetBytes(body, "tools")
+	if !tools.Exists() || !tools.IsArray() {
+		return body, false
+	}
+
+	changed := false
+	modified := body
+	for i, tool := range tools.Array() {
+		schema := tool.Get("input_schema")
+		if !schema.Exists() || schema.Type != gjson.JSON {
+			continue
+		}
+		cleaned, didClean := cleanSchemaObject([]byte(schema.Raw))
+		if !didClean {
+			continue
+		}
+		path := fmt.Sprintf("tools.%d.input_schema", i)
+		if next, err := sjson.SetRawBytes(modified, path, cleaned); err == nil {
+			modified = next
+			changed = true
+		}
+	}
+	return modified, changed
+}
+
+// cleanSchemaObject recursively strips openaiSchemaArtifacts from a JSON
+// schema object.
+func cleanSchemaObject(schema []byte) ([]byte, bool) {
+	parsed := gjson.ParseBytes(schema)
+	if parsed.Type != gjson.JSON {
+		return schema, false
+	}
+
+	changed := false
+	modified := schema
+
+	parsed.ForEach(func(key, _ gjson.Result) bool {
+		if _, isArtifact := openaiSchemaArtifacts[key.String()]; isArtifact {
+			if next, err := sjson.DeleteBytes(modified, key.String()); err == nil {
+				modified = next
+				changed = true
+			}
+		}
+		return true
+	})
+
+	props := gjson.GetBytes(modified, "properties")
+	if props.Exists() && props.Type == gjson.JSON {
+		props.ForEach(func(propKey, propVal gjson.Result) bool {
+			if propVal.Type != gjson.JSON {
+				return true
+			}
+			cleaned, didClean := cleanSchemaObject([]byte(propVal.Raw))
+			if didClean {
+				path := "properties." + propKey.String()
+				if next, err := sjson.SetRawBytes(modified, path, cleaned); err == nil {
+					modified = next
+					changed = true
+				}
+			}
+			return true
+		})
+	}
+
+	items := gjson.GetBytes(modified, "items")
+	if items.Exists() && items.Type == gjson.JSON {
+		cleaned, didClean := cleanSchemaObject([]byte(items.Raw))
+		if didClean {
+			if next, err := sjson.SetRawBytes(modified, "items", cleaned); err == nil {
+				modified = next
+				changed = true
+			}
+		}
+	}
+
 	return modified, changed
 }

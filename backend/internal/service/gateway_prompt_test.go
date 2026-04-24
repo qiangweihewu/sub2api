@@ -280,87 +280,88 @@ func TestInjectClaudeCodePrompt(t *testing.T) {
 }
 
 func TestRewriteSystemForNonClaudeCode(t *testing.T) {
-	// Updated contract (v0.1.119+): user's system prompt is appended as a second
-	// text block in the `system` array (mirroring `claude --append-system-prompt`
-	// wire format). Messages array is never mutated — no fake user/assistant
-	// injection, which was the primary third-party tell for Anthropic.
+	// Updated contract (v0.1.120+): system array is:
+	//   [0] billing header (x-anthropic-billing-header)
+	//   [1] Claude Code prompt (with cache_control)
+	//   [2] optional user system prompt (with cache_control)
+	// Messages array is never mutated.
 	tests := []struct {
 		name            string
 		body            string
 		system          any
-		wantSystemLen   int    // how many blocks in system array
-		wantAppendText  string // text of the 2nd block (empty = no 2nd block)
-		wantMessagesLen int    // unchanged from input in all cases
+		wantSystemLen   int    // billing + CC + optional user
+		wantAppendText  string // text of the user block (empty = no user block)
+		wantMessagesLen int
 	}{
 		{
-			name:            "nil system - only CC block",
+			name:            "nil system - billing + CC",
 			body:            `{"model":"claude-3","messages":[{"role":"user","content":"hello"}]}`,
 			system:          nil,
-			wantSystemLen:   1,
+			wantSystemLen:   2,
 			wantMessagesLen: 1,
 		},
 		{
-			name:            "empty string system - only CC block",
+			name:            "empty string system - billing + CC",
 			body:            `{"model":"claude-3","messages":[{"role":"user","content":"hello"}]}`,
 			system:          "",
-			wantSystemLen:   1,
+			wantSystemLen:   2,
 			wantMessagesLen: 1,
 		},
 		{
-			name:            "custom string system - appended as 2nd block",
+			name:            "custom string system - billing + CC + user",
 			body:            `{"model":"claude-3","messages":[{"role":"user","content":"hello"}]}`,
 			system:          "You are a personal assistant running inside OpenClaw.",
-			wantSystemLen:   2,
+			wantSystemLen:   3,
 			wantAppendText:  "You are a personal assistant running inside OpenClaw.",
 			wantMessagesLen: 1,
 		},
 		{
-			name:            "system equals Claude Code prompt - only CC block (deduped)",
+			name:            "system equals Claude Code prompt - billing + CC (deduped)",
 			body:            `{"model":"claude-3","messages":[{"role":"user","content":"hello"}]}`,
 			system:          claudeCodeSystemPrompt,
-			wantSystemLen:   1,
+			wantSystemLen:   2,
 			wantMessagesLen: 1,
 		},
 		{
-			name: "array system with custom blocks - joined and appended",
+			name: "array system with custom blocks - billing + CC + joined user",
 			body: `{"model":"claude-3","messages":[{"role":"user","content":"hello"}]}`,
 			system: []any{
 				map[string]any{"type": "text", "text": "First instruction"},
 				map[string]any{"type": "text", "text": "Second instruction"},
 			},
-			wantSystemLen:   2,
+			wantSystemLen:   3,
 			wantAppendText:  "First instruction\n\nSecond instruction",
 			wantMessagesLen: 1,
 		},
 		{
-			name:            "empty array system - only CC block",
+			name:            "empty array system - billing + CC",
 			body:            `{"model":"claude-3","messages":[{"role":"user","content":"hello"}]}`,
 			system:          []any{},
-			wantSystemLen:   1,
+			wantSystemLen:   2,
 			wantMessagesLen: 1,
 		},
 		{
-			name:            "json.RawMessage string system - appended",
+			name:            "json.RawMessage string system - billing + CC + user",
 			body:            `{"model":"claude-3","system":"Custom prompt","messages":[{"role":"user","content":"hello"}]}`,
 			system:          json.RawMessage(`"Custom prompt"`),
-			wantSystemLen:   2,
+			wantSystemLen:   3,
 			wantAppendText:  "Custom prompt",
 			wantMessagesLen: 1,
 		},
 		{
-			name:            "json.RawMessage nil system - only CC block",
+			name:            "json.RawMessage nil system - billing + CC",
 			body:            `{"model":"claude-3","messages":[{"role":"user","content":"hello"}]}`,
 			system:          json.RawMessage(nil),
-			wantSystemLen:   1,
+			wantSystemLen:   2,
 			wantMessagesLen: 1,
 		},
 		{
 			name:            "multiple original messages preserved unchanged",
 			body:            `{"model":"claude-3","messages":[{"role":"user","content":"msg1"},{"role":"assistant","content":"resp1"},{"role":"user","content":"msg2"}]}`,
 			system:          "Be helpful",
-			wantSystemLen:   2,
+			wantSystemLen:   3,
 			wantAppendText:  "Be helpful",
-			wantMessagesLen: 3, // originals unchanged, no injection
+			wantMessagesLen: 3,
 		},
 	}
 
@@ -372,31 +373,42 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			err := json.Unmarshal(result, &parsed)
 			require.NoError(t, err)
 
-			// system is always an array; first block is the CC prompt; optional
-			// second block is the user's appended prompt.
 			systemArr, ok := parsed["system"].([]any)
 			require.True(t, ok, "system should be an array, got %T", parsed["system"])
 			require.Len(t, systemArr, tt.wantSystemLen, "system block count")
 
-			firstBlock, ok := systemArr[0].(map[string]any)
+			// system[0]: billing header
+			billingBlock, ok := systemArr[0].(map[string]any)
 			require.True(t, ok)
-			require.Equal(t, "text", firstBlock["type"])
-			require.Equal(t, claudeCodeSystemPrompt, firstBlock["text"])
-			cc, ok := firstBlock["cache_control"].(map[string]any)
+			require.Equal(t, "text", billingBlock["type"])
+			billingText, ok := billingBlock["text"].(string)
+			require.True(t, ok)
+			require.True(t, strings.HasPrefix(billingText, "x-anthropic-billing-header:"),
+				"billing header should start with x-anthropic-billing-header:, got: %s", billingText)
+			require.Contains(t, billingText, "cc_version=")
+			require.Contains(t, billingText, "cc_entrypoint=cli")
+
+			// system[1]: CC prompt
+			ccBlock, ok := systemArr[1].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, "text", ccBlock["type"])
+			require.Equal(t, claudeCodeSystemPrompt, ccBlock["text"])
+			cc, ok := ccBlock["cache_control"].(map[string]any)
 			require.True(t, ok, "CC block should have cache_control")
 			require.Equal(t, "ephemeral", cc["type"])
 
-			if tt.wantSystemLen == 2 {
-				secondBlock, ok := systemArr[1].(map[string]any)
+			// system[2]: optional user prompt
+			if tt.wantAppendText != "" {
+				require.True(t, len(systemArr) >= 3, "expected user prompt block")
+				userBlock, ok := systemArr[2].(map[string]any)
 				require.True(t, ok)
-				require.Equal(t, "text", secondBlock["type"])
-				require.Equal(t, tt.wantAppendText, secondBlock["text"])
-				cc2, ok := secondBlock["cache_control"].(map[string]any)
-				require.True(t, ok, "append block should have cache_control")
+				require.Equal(t, "text", userBlock["type"])
+				require.Equal(t, tt.wantAppendText, userBlock["text"])
+				cc2, ok := userBlock["cache_control"].(map[string]any)
+				require.True(t, ok, "user block should have cache_control")
 				require.Equal(t, "ephemeral", cc2["type"])
 			}
 
-			// messages unchanged from input — no injection
 			messages, ok := parsed["messages"].([]any)
 			require.True(t, ok, "messages should be an array")
 			require.Len(t, messages, tt.wantMessagesLen)

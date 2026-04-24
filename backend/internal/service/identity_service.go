@@ -24,15 +24,16 @@ var (
 	userAgentVersionRegex = regexp.MustCompile(`/(\d+)\.(\d+)\.(\d+)`)
 )
 
-// 默认指纹值（当客户端未提供时使用）
+// 默认指纹值（当客户端未提供时使用）。
+// Must stay in sync with claude.DefaultHeaders to avoid fingerprint mismatch.
 var defaultFingerprint = Fingerprint{
 	UserAgent:               "claude-cli/2.1.116 (external, cli)",
 	StainlessLang:           "js",
-	StainlessPackageVersion: "0.90.0",
+	StainlessPackageVersion: "0.70.0",
 	StainlessOS:             "Linux",
 	StainlessArch:           "arm64",
 	StainlessRuntime:        "node",
-	StainlessRuntimeVersion: "v25.1.0",
+	StainlessRuntimeVersion: "v22.11.0",
 }
 
 // Fingerprint represents account fingerprint data
