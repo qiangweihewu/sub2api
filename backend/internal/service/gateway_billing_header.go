@@ -141,18 +141,11 @@ func extractFirstUserMessageTextForFingerprint(body []byte) string {
 }
 
 func computeClaudeFingerprint(message, version string) string {
-	var p4, p7, p20 string
 	rn := []rune(message)
-	if len(rn) > 4 {
-		p4 = string(rn[4])
-	}
-	if len(rn) > 7 {
-		p7 = string(rn[7])
-	}
-	if len(rn) > 20 {
-		p20 = string(rn[20])
-	}
-	
+	p4 := runeAtOrZero(rn, 4)
+	p7 := runeAtOrZero(rn, 7)
+	p20 := runeAtOrZero(rn, 20)
+
 	h := sha256.New()
 	h.Write([]byte(claudeFingerprintSalt + p4 + p7 + p20 + version))
 	hashHex := hex.EncodeToString(h.Sum(nil))
@@ -160,4 +153,11 @@ func computeClaudeFingerprint(message, version string) string {
 		return hashHex[:3]
 	}
 	return ""
+}
+
+func runeAtOrZero(rn []rune, idx int) string {
+	if idx < len(rn) {
+		return string(rn[idx])
+	}
+	return "0"
 }

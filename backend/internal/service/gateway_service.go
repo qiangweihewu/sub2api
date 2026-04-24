@@ -1355,8 +1355,6 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 		userID = fp.ClientID
 	}
 	if userID == "" {
-		// Fall back to a random, well-formed client id so we can still satisfy
-		// Claude Code OAuth requirements when account metadata is incomplete.
 		userID = generateClientID()
 	}
 
@@ -1367,11 +1365,7 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 		sessionID = generateSessionUUID(seed)
 	}
 
-	// 根据指纹 UA 版本选择输出格式
-	var uaVersion string
-	if fp != nil {
-		uaVersion = ExtractCLIVersion(fp.UserAgent)
-	}
+	uaVersion := mimicCLIVersion()
 	accountUUID := strings.TrimSpace(account.GetExtraString("account_uuid"))
 	return FormatMetadataUserID(userID, accountUUID, sessionID, uaVersion)
 }
@@ -1379,6 +1373,10 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 // GenerateSessionUUID creates a deterministic UUID4 from a seed string.
 func GenerateSessionUUID(seed string) string {
 	return generateSessionUUID(seed)
+}
+
+func mimicCLIVersion() string {
+	return ExtractCLIVersion(claude.DefaultHeaders["User-Agent"])
 }
 
 func generateSessionUUID(seed string) string {
@@ -3974,7 +3972,6 @@ func injectClaudeCodePrompt(body []byte, system any) []byte {
 func rewriteSystemForNonClaudeCode(body []byte, system any) []byte {
 	system = normalizeSystemParam(system)
 
-	// 1. 提取原始 system prompt 文本（string 或 array 形式都支持）。
 	var originalSystemText string
 	switch v := system.(type) {
 	case string:
@@ -3991,10 +3988,17 @@ func rewriteSystemForNonClaudeCode(body []byte, system any) []byte {
 		originalSystemText = strings.Join(parts, "\n\n")
 	}
 
-	// 2. 构造新的 system 数组：第一个块始终是 Claude Code 基础提示词（1h cache），
-	//    如果客户端有独立 system prompt 并且不是 CC 提示词本身，就作为第二个块
-	//    append 上去（5m cache 是真 CLI 在 append 场景的默认 TTL）。
+	// Build billing header: real CLI always inserts this as system[0].
+	version := mimicCLIVersion()
+	msgText := extractFirstUserMessageTextForFingerprint(body)
+	buildHash := computeClaudeFingerprint(msgText, version)
+	billingText := fmt.Sprintf("x-anthropic-billing-header: cc_version=%s.%s; cc_entrypoint=cli;", version, buildHash)
+
 	blocks := []map[string]any{
+		{
+			"type": "text",
+			"text": billingText,
+		},
 		{
 			"type":          "text",
 			"text":          claudeCodeSystemPrompt,
@@ -5798,7 +5802,8 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			if !enableMPT {
 				accountUUID := account.GetExtraString("account_uuid")
 				if accountUUID != "" && fp.ClientID != "" {
-					if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID, fp.UserAgent); err == nil && len(newBody) > 0 {
+					mimicUA := claude.DefaultHeaders["User-Agent"]
+					if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID, mimicUA); err == nil && len(newBody) > 0 {
 						body = newBody
 					}
 				}
