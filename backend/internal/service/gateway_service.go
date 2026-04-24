@@ -5791,6 +5791,28 @@ func (s *GatewayService) handleBedrockNonStreamingResponse(
 }
 
 func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, tokenType, modelID string, reqStream bool, mimicClaudeCode bool) (*http.Request, error) {
+	// Defensive safety net (v0.1.126+): if the caller passed mimicClaudeCode=false
+	// for an OAuth account whose client UA is NOT `claude-cli/X.Y.Z`, we force mimic
+	// back on. Production captures showed that some code paths (notably failover
+	// retries and OpenClaw-wrapped Claude Code CLI requests) reach here with
+	// mimic=false even though the request is clearly from a non-CC client — and
+	// the upstream then rejects with "Third-party apps now draw from your extra
+	// usage" because the headers are OpenAI/JS while the body is Claude-Code-shaped.
+	// Strict rule: only believe mimic=false when we can *prove* the client is a
+	// real Claude Code CLI via its UA prefix. Anything else → mimic.
+	if !mimicClaudeCode && tokenType == "oauth" && account != nil && account.IsOAuth() {
+		clientUA := ""
+		if c != nil && c.Request != nil {
+			clientUA = c.Request.Header.Get("User-Agent")
+		}
+		if !claudeCliUserAgentRe.MatchString(clientUA) {
+			logger.LegacyPrintf("service.gateway",
+				"[MimicSafetyNet] forcing mimicClaudeCode=true: account=%d tokenType=%s clientUA=%q (not a real claude-cli UA)",
+				account.ID, tokenType, clientUA)
+			mimicClaudeCode = true
+		}
+	}
+
 	// 确定目标URL
 	targetURL := claudeAPIURL
 	if account.Type == AccountTypeAPIKey {
