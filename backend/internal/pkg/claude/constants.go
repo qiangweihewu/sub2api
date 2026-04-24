@@ -11,6 +11,7 @@ const (
 	BetaFineGrainedToolStreaming = "fine-grained-tool-streaming-2025-05-14"
 	BetaTokenCounting            = "token-counting-2024-11-01"
 	BetaContext1M                = "context-1m-2025-08-07"
+	BetaContextManagement        = "context-management-2025-06-27"
 	BetaFastMode                 = "fast-mode-2026-02-01"
 )
 

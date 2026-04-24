@@ -18,6 +18,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 	"go.uber.org/zap"
 )
 
@@ -96,6 +97,13 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	anthropicBody, err := json.Marshal(anthropicReq)
 	if err != nil {
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
+	}
+
+	// 5a. Preserve Anthropic-native fields that the CC→Responses→Anthropic
+	// conversion chain does not map. These are pass-through fields the client
+	// sent in OpenAI-compat format but are only meaningful in the Anthropic body.
+	if cm := gjson.GetBytes(body, "context_management"); cm.Exists() {
+		anthropicBody, _ = sjson.SetRawBytes(anthropicBody, "context_management", []byte(cm.Raw))
 	}
 
 	// 6. Apply Claude Code mimicry for OAuth accounts

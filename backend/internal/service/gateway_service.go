@@ -5961,6 +5961,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			if !strings.Contains(strings.ToLower(modelID), "haiku") {
 				requiredBetas = []string{claude.BetaClaudeCode, claude.BetaOAuth, claude.BetaInterleavedThinking}
 			}
+			if bodyNeedsContextManagementBeta(body) {
+				requiredBetas = append(requiredBetas, claude.BetaContextManagement)
+			}
 			setHeaderRaw(req.Header, "anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, effectiveDropSet))
 		} else {
 			// Claude Code 客户端：尽量透传原始 header，仅补齐 oauth beta
@@ -6068,15 +6071,29 @@ func requestNeedsBetaFeatures(body []byte) bool {
 	if strings.EqualFold(thinkingType, "enabled") || strings.EqualFold(thinkingType, "adaptive") {
 		return true
 	}
+	if gjson.GetBytes(body, "context_management").Exists() {
+		return true
+	}
 	return false
+}
+
+// bodyNeedsContextManagementBeta returns true when the Anthropic request body
+// contains a context_management field, which requires the
+// context-management-2025-06-27 beta header.
+func bodyNeedsContextManagementBeta(body []byte) bool {
+	return gjson.GetBytes(body, "context_management").Exists()
 }
 
 func defaultAPIKeyBetaHeader(body []byte) string {
 	modelID := gjson.GetBytes(body, "model").String()
+	base := claude.APIKeyBetaHeader
 	if strings.Contains(strings.ToLower(modelID), "haiku") {
-		return claude.APIKeyHaikuBetaHeader
+		base = claude.APIKeyHaikuBetaHeader
 	}
-	return claude.APIKeyBetaHeader
+	if bodyNeedsContextManagementBeta(body) {
+		base += "," + claude.BetaContextManagement
+	}
+	return base
 }
 
 func applyClaudeOAuthHeaderDefaults(req *http.Request) {
@@ -9000,6 +9017,9 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 
 			incomingBeta := getHeaderRaw(req.Header, "anthropic-beta")
 			requiredBetas := []string{claude.BetaClaudeCode, claude.BetaOAuth, claude.BetaInterleavedThinking, claude.BetaTokenCounting}
+			if bodyNeedsContextManagementBeta(body) {
+				requiredBetas = append(requiredBetas, claude.BetaContextManagement)
+			}
 			setHeaderRaw(req.Header, "anthropic-beta", mergeAnthropicBetaDropping(requiredBetas, incomingBeta, ctEffectiveDropSet))
 		} else {
 			clientBetaHeader := getHeaderRaw(req.Header, "anthropic-beta")
