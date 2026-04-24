@@ -69,6 +69,7 @@ export interface BuildCreateOrderPayloadInput {
   orderType: OrderType
   planId?: number
   origin?: string
+  isMobile: boolean
   isWechatBrowser: boolean
 }
 
@@ -107,6 +108,7 @@ export function buildCreateOrderPayload(input: BuildCreateOrderPayloadInput): Cr
     amount: input.amount,
     payment_type: visibleMethod,
     order_type: input.orderType,
+    is_mobile: input.isMobile,
     payment_source: visibleMethod === 'wxpay' && input.isWechatBrowser
       ? 'wechat_in_app_resume'
       : 'hosted_redirect',

@@ -323,6 +323,7 @@ interface CreateOrderOptions {
   wechatResumeToken?: string
   paymentType?: string
   isResume?: boolean
+  mobileQrFallbackAttempted?: boolean
 }
 
 interface WeixinJSBridgeLike {
@@ -678,14 +679,15 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
   submitting.value = true
   errorMessage.value = ''
   errorHintMessage.value = ''
+  const requestType = normalizeVisibleMethod(options.paymentType || selectedMethod.value) || options.paymentType || selectedMethod.value
   try {
-    const requestType = normalizeVisibleMethod(options.paymentType || selectedMethod.value) || options.paymentType || selectedMethod.value
     const payload = buildCreateOrderPayload({
       amount: orderAmount,
       paymentType: requestType,
       orderType,
       planId,
       origin: typeof window !== 'undefined' ? window.location.origin : '',
+      isMobile: isMobileDevice(),
       isWechatBrowser: typeof window !== 'undefined' && /MicroMessenger/i.test(window.navigator.userAgent),
     })
     if (options.openid) {
@@ -763,8 +765,20 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
           appStore.showInfo(t('payment.qr.cancelled'))
           resetPayment()
         } else if (errMsg && !errMsg.includes('ok')) {
-          applyScenarioError({ reason: 'WECHAT_JSAPI_FAILED', message: errMsg }, visibleMethod)
           resetPayment()
+          const fallbackApplied = await attemptMobileQrFallback(
+            { reason: 'WECHAT_JSAPI_FAILED', message: errMsg },
+            {
+              orderAmount,
+              orderType,
+              planId,
+              paymentType: visibleMethod,
+              attempted: options.mobileQrFallbackAttempted === true,
+            },
+          )
+          if (!fallbackApplied) {
+            applyScenarioError({ reason: 'WECHAT_JSAPI_FAILED', message: errMsg }, visibleMethod)
+          }
         } else {
           const resultState = { ...decision.paymentState }
           resetPayment()
@@ -772,7 +786,16 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
         }
       } catch (err: unknown) {
         resetPayment()
-        throw err
+        const fallbackApplied = await attemptMobileQrFallback(err, {
+          orderAmount,
+          orderType,
+          planId,
+          paymentType: visibleMethod,
+          attempted: options.mobileQrFallbackAttempted === true,
+        })
+        if (!fallbackApplied) {
+          throw err
+        }
       }
       return
     }
@@ -792,6 +815,14 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
     } else if (apiErr.reason === 'CANCEL_RATE_LIMITED') {
       errorMessage.value = t('payment.errors.cancelRateLimited')
       errorHintMessage.value = ''
+    } else if (await attemptMobileQrFallback(err, {
+      orderAmount,
+      orderType,
+      planId,
+      paymentType: requestType,
+      attempted: options.mobileQrFallbackAttempted === true,
+    })) {
+      return
     } else {
       const handled = applyScenarioError(
         err,
@@ -814,7 +845,6 @@ async function createOrder(orderAmount: number, orderType: OrderType, planId?: n
 async function onExpressCheckout(payload: { event: any; elements: any; stripe: any }) {
   const { event, elements, stripe } = payload
   try {
-    // 1. Validate we have an amount entered.
     if (!amount.value || amount.value <= 0) {
       if (typeof event.paymentFailed === 'function') {
         event.paymentFailed({ reason: 'fail' })
@@ -822,7 +852,6 @@ async function onExpressCheckout(payload: { event: any; elements: any; stripe: a
       return
     }
 
-    // 2. Submit the ECE elements (client-side validation, wallet sheet UI).
     const { error: submitError } = await elements.submit()
     if (submitError) {
       if (typeof event.paymentFailed === 'function') {
@@ -831,10 +860,6 @@ async function onExpressCheckout(payload: { event: any; elements: any; stripe: a
       return
     }
 
-    // 3. Create the order on our backend with payment_type=card so the
-    //    backend uses automatic_payment_methods (supporting all activated
-    //    wallet methods). Call paymentAPI directly to get client_secret
-    //    without triggering the routing side-effects inside createOrder().
     const orderResponse = await paymentAPI.createOrder({
       amount: amount.value,
       payment_type: 'card',
@@ -850,7 +875,6 @@ async function onExpressCheckout(payload: { event: any; elements: any; stripe: a
       return
     }
 
-    // 4. Confirm the payment via Stripe. On success Stripe redirects to return_url.
     const { error: confirmError } = await stripe.confirmPayment({
       elements,
       clientSecret: orderResult.client_secret,
@@ -870,6 +894,101 @@ async function onExpressCheckout(payload: { event: any; elements: any; stripe: a
     if (typeof event.paymentFailed === 'function') {
       event.paymentFailed({ reason: 'fail' })
     }
+  }
+}
+
+interface MobileQrFallbackContext {
+  orderAmount: number
+  orderType: OrderType
+  planId?: number
+  paymentType: string
+  attempted: boolean
+}
+
+function shouldFallbackToDesktopQr(err: unknown, paymentMethod: string, attempted: boolean): boolean {
+  if (attempted || !isMobileDevice()) {
+    return false
+  }
+
+  const normalizedMethod = normalizeVisibleMethod(paymentMethod) || paymentMethod
+  const reason = typeof err === 'object' && err && 'reason' in err && typeof err.reason === 'string'
+    ? err.reason
+    : ''
+  const message = err instanceof Error
+    ? err.message
+    : (typeof err === 'object' && err && 'message' in err && typeof err.message === 'string'
+      ? err.message
+      : '')
+  const normalizedMessage = message.toLowerCase()
+
+  if (normalizedMethod === 'wxpay') {
+    return reason === 'WECHAT_H5_NOT_AUTHORIZED'
+      || reason === 'WECHAT_PAYMENT_MP_NOT_CONFIGURED'
+      || reason === 'WECHAT_JSAPI_FAILED'
+      || reason === 'PAYMENT_GATEWAY_ERROR'
+      || reason === 'UNHANDLED_PAYMENT_SCENARIO'
+      || normalizedMessage.includes('weixinjsbridge is unavailable')
+      || normalizedMessage.includes('wechat_jsapi_unavailable')
+  }
+
+  if (normalizedMethod === 'alipay') {
+    return reason === 'PAYMENT_GATEWAY_ERROR' || reason === 'UNHANDLED_PAYMENT_SCENARIO'
+  }
+
+  return false
+}
+
+async function attemptMobileQrFallback(err: unknown, context: MobileQrFallbackContext): Promise<boolean> {
+  if (!shouldFallbackToDesktopQr(err, context.paymentType, context.attempted)) {
+    return false
+  }
+
+  try {
+    const visibleMethod = normalizeVisibleMethod(context.paymentType) || context.paymentType
+    const payload = buildCreateOrderPayload({
+      amount: context.orderAmount,
+      paymentType: visibleMethod,
+      orderType: context.orderType,
+      planId: context.planId,
+      origin: typeof window !== 'undefined' ? window.location.origin : '',
+      isMobile: false,
+      isWechatBrowser: false,
+    })
+    const result = await paymentStore.createOrder(payload) as CreateOrderResult & { resume_token?: string }
+    const stripeMethod = visibleMethod === 'wxpay' ? 'wechat_pay' : 'alipay'
+    const stripeRouteUrl = result.client_secret
+      ? router.resolve({
+        path: '/payment/stripe',
+        query: {
+          order_id: String(result.order_id),
+          client_secret: result.client_secret,
+          method: stripeMethod,
+          resume_token: result.resume_token || undefined,
+        },
+      }).href
+      : ''
+    const decision = decidePaymentLaunch(result, {
+      visibleMethod,
+      orderType: context.orderType,
+      isMobile: false,
+      isWechatBrowser: false,
+      stripePopupUrl: stripeRouteUrl,
+      stripeRouteUrl,
+    })
+
+    if (decision.kind !== 'qr_waiting' || !decision.paymentState.qrCode) {
+      return false
+    }
+
+    errorMessage.value = ''
+    errorHintMessage.value = ''
+    paymentState.value = decision.paymentState
+    paymentPhase.value = 'paying'
+    persistRecoverySnapshot(decision.recovery)
+    appStore.showWarning(t('payment.errors.mobilePaymentFallbackToQr'))
+    return true
+  } catch {
+    return false
   }
 }
 
