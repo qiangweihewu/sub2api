@@ -195,6 +195,23 @@ func convertResponsesInputToAnthropic(inputRaw json.RawMessage) (json.RawMessage
 	// Merge consecutive same-role messages (Anthropic requires alternating roles)
 	messages = mergeConsecutiveMessages(messages)
 
+	// Trailing-assistant fix for non-native Anthropic paths.
+	// Some models (e.g. claude-opus-4-6 with reasoning/thinking enabled) reject
+	// assistant-prefill with "This model does not support assistant message
+	// prefill. The conversation must end with a user message." OpenAI-compat
+	// clients often send a trailing assistant turn either intentionally
+	// (prefill pattern) or as a history replay where the new user turn is
+	// missing. Append a minimal "continue" user message so the request is
+	// valid while preserving the assistant text as context. Native
+	// /v1/messages requests don't come through this converter.
+	if n := len(messages); n > 0 && messages[n-1].Role == "assistant" {
+		continuationContent, _ := json.Marshal([]AnthropicContentBlock{{Type: "text", Text: "continue"}})
+		messages = append(messages, AnthropicMessage{
+			Role:    "user",
+			Content: continuationContent,
+		})
+	}
+
 	return system, messages, nil
 }
 
