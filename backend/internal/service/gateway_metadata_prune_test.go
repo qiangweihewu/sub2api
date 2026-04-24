@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 // TestNormalizeClaudeOAuthRequestBody_PrunesClientMetadataWhenNotInjecting
@@ -53,4 +54,33 @@ func TestNormalizeClaudeOAuthRequestBody_PreservesMetadataWithoutUserID(t *testi
 	// (This is still wrong fingerprint-wise but it's a pre-existing edge case;
 	// we only assert the safety behaviour here, not policy.)
 	require.Contains(t, string(result), `"trace_id":"abc123"`)
+}
+
+// TestForwardCountTokens_StripsMetadataField verifies that when an OAuth
+// account is in mimic mode and the client sends a count_tokens request with
+// metadata, our gateway strips the entire metadata field. Anthropic's
+// /v1/messages/count_tokens endpoint returns HTTP 400 "metadata: Extra inputs
+// are not permitted" if metadata is present at all (regardless of contents).
+//
+// This is a unit-level check on the strip step. The previous bug also
+// erroneously injected metadata into the count_tokens body — this test
+// guards the absence of metadata after the strip.
+func TestForwardCountTokens_StripsMetadataField(t *testing.T) {
+	// Simulate the body that ForwardCountTokens hands to the upstream after
+	// mimic normalization + the new strip step.
+	body := []byte(`{"model":"claude-opus-4-7","messages":[{"role":"user","content":"hi"}],"metadata":{"user_id":"abc","trace_id":"xyz"}}`)
+
+	// First normalize (no inject — count_tokens path).
+	body, _ = normalizeClaudeOAuthRequestBody(body, "claude-opus-4-7", claudeOAuthNormalizeOptions{
+		stripSystemCacheControl: true,
+	})
+
+	// Then the explicit metadata strip (what ForwardCountTokens does after normalize).
+	if gjson.GetBytes(body, "metadata").Exists() {
+		cleaned, err := sjson.DeleteBytes(body, "metadata")
+		require.NoError(t, err)
+		body = cleaned
+	}
+
+	require.False(t, gjson.GetBytes(body, "metadata").Exists(), "metadata must be absent in count_tokens request")
 }

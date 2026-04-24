@@ -8475,20 +8475,17 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
 
 	if shouldMimicClaudeCode {
+		// Anthropic /v1/messages/count_tokens does NOT accept the `metadata`
+		// field at all (returns 400 "metadata: Extra inputs are not permitted").
+		// So we must NOT inject metadata here, AND must strip any metadata the
+		// client may have included.
 		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: true}
-		if s.identityService != nil {
-			fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
-			if err == nil && fp != nil {
-				_, mimicMPT, _ := s.settingService.GetGatewayForwardingSettings(ctx)
-				if !mimicMPT {
-					if metadataUserID := s.buildOAuthMetadataUserID(parsed, account, fp); metadataUserID != "" {
-						normalizeOpts.injectMetadata = true
-						normalizeOpts.metadataUserID = metadataUserID
-					}
-				}
+		body, reqModel = normalizeClaudeOAuthRequestBody(body, reqModel, normalizeOpts)
+		if gjson.GetBytes(body, "metadata").Exists() {
+			if cleaned, err := sjson.DeleteBytes(body, "metadata"); err == nil {
+				body = cleaned
 			}
 		}
-		body, reqModel = normalizeClaudeOAuthRequestBody(body, reqModel, normalizeOpts)
 	}
 
 	// Antigravity 账户不支持 count_tokens，返回 404 让客户端 fallback 到本地估算。
