@@ -1201,13 +1201,15 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 			out = next
 			modified = true
 		}
-		// Real Claude Code emits metadata = {"user_id": "..."} with no other keys.
-		// After injecting/ensuring user_id, prune any additional keys so our
-		// request body exactly matches CC's shape.
-		if next, changed := pruneClaudeOAuthMetadataToUserIDOnly(out); changed {
-			out = next
-			modified = true
-		}
+	}
+	// Always prune metadata to {user_id: "..."} only. Even when the client
+	// already supplied metadata.user_id (in which case we don't inject our own),
+	// extra keys like trace_id / project_id (pi-ai SDK, OpenClaw) cause upstream
+	// 400 "metadata: Extra inputs are not permitted". pruneClaudeOAuthMetadataToUserIDOnly
+	// is a no-op when metadata is missing or user_id is absent/empty.
+	if next, changed := pruneClaudeOAuthMetadataToUserIDOnly(out); changed {
+		out = next
+		modified = true
 	}
 
 	// Strip fields real Claude Code never sends on /v1/messages. Leaving any
