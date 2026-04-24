@@ -764,23 +764,25 @@ func TestGatewayService_AnthropicOAuth_ForwardPreservesBillingHeaderSystemBlock(
 			require.True(t, system.IsArray(), "system should be an array")
 			systemArr := system.Array()
 
-			// v0.1.124: billing header injection reverted — system = [CC_prompt, user_prompt]
-			require.Len(t, systemArr, 2, "CC + user blocks (no injected billing header)")
+			// v0.1.125: system contains only the Claude Code identity block —
+			// client fingerprint text is moved to messages[] to avoid Anthropic's
+			// semantic third-party detection.
+			require.Len(t, systemArr, 1, "system must have exactly one CC block")
 
-			// system[0]: CC prompt
 			require.Equal(t, claudeCodeSystemPrompt, systemArr[0].Get("text").String())
 			require.Equal(t, "ephemeral", systemArr[0].Get("cache_control.type").String())
 
-			// system[1]: user's original prompt (keeps its own x-anthropic-billing-header text
-			// since that originated from the client body, not our injection).
-			require.Contains(t, systemArr[1].Get("text").String(), "x-anthropic-billing-header keep")
-			require.Equal(t, "ephemeral", systemArr[1].Get("cache_control.type").String())
-
-			// messages 不应被修改（仅保留客户端原始消息）
+			// Client's "x-anthropic-billing-header keep" text now lives in
+			// messages (as a fake user instruction), not in system.
 			messages := gjson.GetBytes(upstream.lastBody, "messages")
 			require.True(t, messages.IsArray())
-			require.Len(t, messages.Array(), 1, "messages must not be mutated by system rewrite")
-			require.Equal(t, "user", messages.Array()[0].Get("role").String())
+			msgArr := messages.Array()
+			require.GreaterOrEqual(t, len(msgArr), 2, "expected injected instr+ack pair + original")
+			require.Equal(t, "user", msgArr[0].Get("role").String())
+			require.Contains(t, msgArr[0].Get("content.0.text").String(), "[System Instructions]")
+			require.Contains(t, msgArr[0].Get("content.0.text").String(), "x-anthropic-billing-header keep")
+			require.Equal(t, "assistant", msgArr[1].Get("role").String())
+			require.Equal(t, "Understood. I will follow these instructions.", msgArr[1].Get("content.0.text").String())
 		})
 	}
 }

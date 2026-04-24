@@ -3969,16 +3969,25 @@ func injectClaudeCodePrompt(body []byte, system any) []byte {
 	return result
 }
 
-// rewriteSystemForNonClaudeCode 将非 Claude Code 客户端的 system prompt 重写为真实
-// Claude CLI 的 system 结构 —— 一个 array，包含 Claude Code 基础提示词块 + 客户端原始
-// system prompt 作为 append 块（mirrors `claude --append-system-prompt` 的 wire 行为）。
+// rewriteSystemForNonClaudeCode 把非 Claude Code 客户端的请求改造成真 Claude CLI
+// 的 wire 结构：system 字段**仅**包含 Claude Code 身份声明块，客户端原始 system
+// prompt 以 user/assistant 消息对的形式注入到 messages 数组开头。
 //
-// 早期版本曾将客户端 system prompt 注入为 `user`/`assistant` 消息对（"[System
-// Instructions] ..." + "Understood. I will follow these instructions."）。这种
-// 结构在真实 Claude CLI 流量中不存在，是 Anthropic 第三方检测的一个强信号；即便
-// header mimic 到位，body 里出现这对假消息，也会被判为 "Third-party apps now draw
-// from your extra usage…"。现改为仅 append 到 system 数组，和真 CLI 的 --append-
-// system-prompt 行为完全一致。
+// 为什么不直接追加到 system[]（v0.1.119 ~ v0.1.124 的做法）：
+//
+// Anthropic 的第三方检测基于 system 参数**内容**做语义匹配（见 2026-04 社区
+// 研究报告）。如果客户端（如 OpenClaw / opencode / aider）的 system prompt
+// 被追加为 system[1]，文本里充满了 "You are running inside OpenClaw"、
+// "AGENTS.md"、"SOUL.md"、"/root/.openclaw/workspace/" 等强烈的自报家门
+// 特征，即便 headers 完美 mimic、metadata 格式正确，请求依然会被判为第三方
+// 应用，返回 400 "Third-party apps now draw from your extra usage…"。生产
+// 抓包（2026-04-24）证实了这一点。
+//
+// 而 messages 字段是承载用户对话内容的地方，出现任何文本都是正常的（用户可以
+// 谈论 OpenClaw、opencode、任何项目），不会被用作第三方身份识别信号。把客户端
+// system prompt 搬到 messages 里注入，既保留了原始指令的功能性（模型还是能
+// 读到），又彻底消除了 system 层面的语义指纹泄露。这和上游 sub2api 的策略
+// 一致（见 upstream/main:backend/internal/service/gateway_service.go）。
 func rewriteSystemForNonClaudeCode(body []byte, system any) []byte {
 	system = normalizeSystemParam(system)
 
@@ -3998,42 +4007,57 @@ func rewriteSystemForNonClaudeCode(body []byte, system any) []byte {
 		originalSystemText = strings.Join(parts, "\n\n")
 	}
 
-	// NOTE (v0.1.124): Billing header injection removed — rolled back to match
-	// v0.1.115/v0.1.119 effective behavior (which users reported was working).
-	// Rationale:
-	//   1. Upstream v0.1.117 and v0.1.115 NEVER actively inject this header;
-	//      they only sign the `cch=00000` placeholder when a real Claude Code
-	//      client sends it. For OpenClaw / pi-ai / ai-sdk clients (which never
-	//      send the placeholder), no billing header is generated.
-	//   2. We previously (v0.1.120) injected a synthesized billing header with
-	//      a SHA256-based buildHash suffix. If Anthropic's server verifies this
-	//      hash and our algorithm is wrong, we create a STRONGER third-party
-	//      signal than sending no header at all.
-	//   3. Production logs showed hourly "Third-party apps now draw" 400s after
-	//      v0.1.120 — exactly matching the 1h temp-unsched recovery window —
-	//      strongly suggesting the billing header was the dominant cause.
-	// The SHA256 algorithm is retained in gateway_billing_header.go for the
-	// case where a real Claude Code client sends a `cch=00000` placeholder.
-	blocks := []map[string]any{
+	// 1. system 字段: 仅保留 Claude Code 身份声明（一个 text 块，带 ephemeral cache）。
+	//    真 Claude CLI 的 system 也是 array 格式，1 个 text 块。
+	claudeCodeSystemBlock := []map[string]any{
 		{
 			"type":          "text",
 			"text":          claudeCodeSystemPrompt,
 			"cache_control": map[string]string{"type": "ephemeral", "ttl": "1h"},
 		},
 	}
-	ccPromptTrimmed := strings.TrimSpace(claudeCodeSystemPrompt)
-	if originalSystemText != "" && originalSystemText != ccPromptTrimmed && !hasClaudeCodePrefix(originalSystemText) {
-		blocks = append(blocks, map[string]any{
-			"type":          "text",
-			"text":          originalSystemText,
-			"cache_control": map[string]string{"type": "ephemeral"},
-		})
-	}
-
-	out, ok := setJSONValueBytes(body, "system", blocks)
+	out, ok := setJSONValueBytes(body, "system", claudeCodeSystemBlock)
 	if !ok {
 		logger.LegacyPrintf("service.gateway", "Warning: failed to set Claude Code system prompt")
 		return body
+	}
+
+	// 2. 把客户端原 system prompt 作为 user/assistant 消息对注入到 messages 开头。
+	//    如果原 system 本身就是 CC prompt（dedup）或为空，跳过注入。
+	ccPromptTrimmed := strings.TrimSpace(claudeCodeSystemPrompt)
+	if originalSystemText == "" || originalSystemText == ccPromptTrimmed || hasClaudeCodePrefix(originalSystemText) {
+		return out
+	}
+
+	instrMsg, err1 := json.Marshal(map[string]any{
+		"role": "user",
+		"content": []map[string]any{
+			{"type": "text", "text": "[System Instructions]\n" + originalSystemText},
+		},
+	})
+	ackMsg, err2 := json.Marshal(map[string]any{
+		"role": "assistant",
+		"content": []map[string]any{
+			{"type": "text", "text": "Understood. I will follow these instructions."},
+		},
+	})
+	if err1 != nil || err2 != nil {
+		logger.LegacyPrintf("service.gateway", "Warning: failed to marshal system-to-messages injection")
+		return out
+	}
+
+	// 重建 messages 数组：[instr, ack, ...客户端原 messages]
+	items := [][]byte{instrMsg, ackMsg}
+	messagesResult := gjson.GetBytes(out, "messages")
+	if messagesResult.IsArray() {
+		messagesResult.ForEach(func(_, msg gjson.Result) bool {
+			items = append(items, []byte(msg.Raw))
+			return true
+		})
+	}
+
+	if next, setOk := setJSONRawBytes(out, "messages", buildJSONArrayRaw(items)); setOk {
+		out = next
 	}
 	return out
 }
