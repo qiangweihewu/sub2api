@@ -764,19 +764,17 @@ func TestGatewayService_AnthropicOAuth_ForwardPreservesBillingHeaderSystemBlock(
 			require.True(t, system.IsArray(), "system should be an array")
 			systemArr := system.Array()
 
-			// v0.1.120+: system = [billing_header, CC_prompt, user_prompt]
-			require.Len(t, systemArr, 3, "billing + CC + user blocks")
+			// v0.1.124: billing header injection reverted — system = [CC_prompt, user_prompt]
+			require.Len(t, systemArr, 2, "CC + user blocks (no injected billing header)")
 
-			// system[0]: billing header
-			require.True(t, strings.HasPrefix(systemArr[0].Get("text").String(), "x-anthropic-billing-header:"))
+			// system[0]: CC prompt
+			require.Equal(t, claudeCodeSystemPrompt, systemArr[0].Get("text").String())
+			require.Equal(t, "ephemeral", systemArr[0].Get("cache_control.type").String())
 
-			// system[1]: CC prompt
-			require.Equal(t, claudeCodeSystemPrompt, systemArr[1].Get("text").String())
+			// system[1]: user's original prompt (keeps its own x-anthropic-billing-header text
+			// since that originated from the client body, not our injection).
+			require.Contains(t, systemArr[1].Get("text").String(), "x-anthropic-billing-header keep")
 			require.Equal(t, "ephemeral", systemArr[1].Get("cache_control.type").String())
-
-			// system[2]: user's original prompt
-			require.Contains(t, systemArr[2].Get("text").String(), "x-anthropic-billing-header keep")
-			require.Equal(t, "ephemeral", systemArr[2].Get("cache_control.type").String())
 
 			// messages 不应被修改（仅保留客户端原始消息）
 			messages := gjson.GetBytes(upstream.lastBody, "messages")

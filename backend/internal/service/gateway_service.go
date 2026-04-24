@@ -322,8 +322,16 @@ func isClaudeCodeCredentialScopeError(msg string) bool {
 	if m == "" {
 		return false
 	}
-	return strings.Contains(m, "only authorized for use with claude code") &&
-		strings.Contains(m, "cannot be used for other api requests")
+	// Legacy credential-scope error (pre-2026).
+	if strings.Contains(m, "only authorized for use with claude code") &&
+		strings.Contains(m, "cannot be used for other api requests") {
+		return true
+	}
+	// Current third-party detection error (2026+).
+	if strings.Contains(m, "third-party apps") && strings.Contains(m, "extra usage") {
+		return true
+	}
+	return false
 }
 
 // sseDataRe matches SSE data lines with optional whitespace after colon.
@@ -3990,17 +3998,23 @@ func rewriteSystemForNonClaudeCode(body []byte, system any) []byte {
 		originalSystemText = strings.Join(parts, "\n\n")
 	}
 
-	// Build billing header: real CLI always inserts this as system[0].
-	version := mimicCLIVersion()
-	msgText := extractFirstUserMessageTextForFingerprint(body)
-	buildHash := computeClaudeFingerprint(msgText, version)
-	billingText := fmt.Sprintf("x-anthropic-billing-header: cc_version=%s.%s; cc_entrypoint=cli;", version, buildHash)
-
+	// NOTE (v0.1.124): Billing header injection removed — rolled back to match
+	// v0.1.115/v0.1.119 effective behavior (which users reported was working).
+	// Rationale:
+	//   1. Upstream v0.1.117 and v0.1.115 NEVER actively inject this header;
+	//      they only sign the `cch=00000` placeholder when a real Claude Code
+	//      client sends it. For OpenClaw / pi-ai / ai-sdk clients (which never
+	//      send the placeholder), no billing header is generated.
+	//   2. We previously (v0.1.120) injected a synthesized billing header with
+	//      a SHA256-based buildHash suffix. If Anthropic's server verifies this
+	//      hash and our algorithm is wrong, we create a STRONGER third-party
+	//      signal than sending no header at all.
+	//   3. Production logs showed hourly "Third-party apps now draw" 400s after
+	//      v0.1.120 — exactly matching the 1h temp-unsched recovery window —
+	//      strongly suggesting the billing header was the dominant cause.
+	// The SHA256 algorithm is retained in gateway_billing_header.go for the
+	// case where a real Claude Code client sends a `cch=00000` placeholder.
 	blocks := []map[string]any{
-		{
-			"type": "text",
-			"text": billingText,
-		},
 		{
 			"type":          "text",
 			"text":          claudeCodeSystemPrompt,
