@@ -646,6 +646,13 @@ type GatewayConfig struct {
 	// API-key 账号在客户端未提供 anthropic-beta 时，是否按需自动补齐（默认关闭以保持兼容）
 	InjectBetaForAPIKey bool `mapstructure:"inject_beta_for_apikey"`
 
+	// Feature flag: inject real Claude Code 3-block system structure
+	// (billing header + agent identifier + static core prompt) for OAuth mimic
+	// requests. Off by default — enable only when "Third-party apps draw from
+	// your extra usage" 400s reappear and the current single-block mimic is
+	// no longer sufficient. See gateway_cc_system_injector.go.
+	InjectCCSystemBlocks bool `mapstructure:"inject_cc_system_blocks"`
+
 	// 是否允许对部分 400 错误触发 failover（默认关闭以避免改变语义）
 	FailoverOn400 bool `mapstructure:"failover_on_400"`
 
@@ -1638,6 +1645,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.log_upstream_error_body", true)
 	viper.SetDefault("gateway.log_upstream_error_body_max_bytes", 2048)
 	viper.SetDefault("gateway.inject_beta_for_apikey", false)
+	viper.SetDefault("gateway.inject_cc_system_blocks", false)
 	viper.SetDefault("gateway.failover_on_400", false)
 	viper.SetDefault("gateway.max_account_switches", 10)
 	viper.SetDefault("gateway.max_account_switches_gemini", 3)
