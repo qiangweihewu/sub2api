@@ -4265,6 +4265,11 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			!systemIncludesClaudeCodePrompt(parsed.System) {
 			body = rewriteSystemForNonClaudeCode(body, parsed.System)
 			systemRewritten = true
+			// Feature-flagged: replace the single identity block with the
+			// full 3-block Claude Code structure (billing header + identity
+			// + static core prompt). Default off; only enable if production
+			// sees Third-party 400s resurface.
+			body = s.maybeInjectClaudeCodeSystemBlocks(body)
 		}
 
 		// Scrub 第三方客户端指纹：零宽空格混淆敏感词 + 剥离 [System Instructions]/XML

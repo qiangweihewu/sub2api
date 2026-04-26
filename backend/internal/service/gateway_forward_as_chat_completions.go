@@ -118,6 +118,9 @@ func (s *GatewayService) ForwardAsChatCompletions(
 			!systemIncludesClaudeCodePrompt(anthropicReq.System) {
 			anthropicBody = rewriteSystemForNonClaudeCode(anthropicBody, anthropicReq.System)
 			systemRewritten = true
+			// Feature-flagged 3-block system injection (see
+			// gateway_cc_system_injector.go). Default off.
+			anthropicBody = s.maybeInjectClaudeCodeSystemBlocks(anthropicBody)
 		}
 
 		// Scrub 第三方客户端指纹：零宽空格 + marker 剥离 + 工具名 TitleCase。

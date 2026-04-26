@@ -104,6 +104,9 @@ func (s *GatewayService) ForwardAsResponses(
 			!systemIncludesClaudeCodePrompt(anthropicReq.System) {
 			anthropicBody = rewriteSystemForNonClaudeCode(anthropicBody, anthropicReq.System)
 			systemRewritten = true
+			// Feature-flagged 3-block system injection (see
+			// gateway_cc_system_injector.go). Default off.
+			anthropicBody = s.maybeInjectClaudeCodeSystemBlocks(anthropicBody)
 		}
 
 		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: !systemRewritten}
