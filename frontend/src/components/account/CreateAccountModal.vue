@@ -244,6 +244,36 @@
             </div>
           </button>
 
+          <button
+            type="button"
+            @click="accountCategory = 'vertex'"
+            :class="[
+              'flex items-center gap-3 rounded-lg border-2 p-3 text-left transition-all',
+              accountCategory === 'vertex'
+                ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
+                : 'border-gray-200 hover:border-blue-300 dark:border-dark-600 dark:hover:border-blue-700'
+            ]"
+          >
+            <div
+              :class="[
+                'flex h-8 w-8 shrink-0 items-center justify-center rounded-lg',
+                accountCategory === 'vertex'
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-gray-100 text-gray-500 dark:bg-dark-600 dark:text-gray-400'
+              ]"
+            >
+              <Icon name="cloud" size="sm" />
+            </div>
+            <div>
+              <span class="block text-sm font-medium text-gray-900 dark:text-white">{{
+                t('admin.accounts.vertexLabel')
+              }}</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{{
+                t('admin.accounts.vertexDesc')
+              }}</span>
+            </div>
+          </button>
+
         </div>
       </div>
 
@@ -1477,9 +1507,182 @@
         </div>
       </div>
 
-      <!-- 配额控制 (Anthropic apikey/bedrock: 配额限制 + 亲和) -->
+      <!-- Vertex AI credentials (only for Anthropic Vertex type) -->
+      <div v-if="form.platform === 'anthropic' && accountCategory === 'vertex'" class="space-y-4">
+        <!-- Service Account JSON -->
+        <div>
+          <label class="input-label">{{ t('admin.accounts.vertexServiceAccountJson') }}</label>
+          <textarea
+            v-model="vertexServiceAccountJson"
+            rows="6"
+            required
+            class="input font-mono text-xs"
+            placeholder='{"type":"service_account","project_id":"...",...}'
+          ></textarea>
+          <p class="input-hint">{{ t('admin.accounts.vertexServiceAccountJsonHint') }}</p>
+        </div>
+
+        <!-- Project ID -->
+        <div>
+          <label class="input-label">{{ t('admin.accounts.vertexProjectId') }}</label>
+          <input
+            v-model="vertexProjectId"
+            type="text"
+            required
+            class="input font-mono"
+            placeholder="my-gcp-project"
+          />
+          <p class="input-hint">{{ t('admin.accounts.vertexProjectIdHint') }}</p>
+        </div>
+
+        <!-- Region -->
+        <div>
+          <label class="input-label">{{ t('admin.accounts.vertexRegion') }}</label>
+          <select v-model="vertexRegion" class="input">
+            <optgroup label="US">
+              <option value="us-east5">us-east5 (Columbus)</option>
+              <option value="us-central1">us-central1 (Iowa)</option>
+            </optgroup>
+            <optgroup label="Europe">
+              <option value="europe-west1">europe-west1 (Belgium)</option>
+              <option value="europe-west4">europe-west4 (Netherlands)</option>
+            </optgroup>
+            <optgroup label="Asia Pacific">
+              <option value="asia-southeast1">asia-southeast1 (Singapore)</option>
+              <option value="asia-northeast1">asia-northeast1 (Tokyo)</option>
+            </optgroup>
+            <optgroup label="Global">
+              <option value="global">global (multi-region)</option>
+            </optgroup>
+          </select>
+          <p class="input-hint">{{ t('admin.accounts.vertexRegionHint') }}</p>
+        </div>
+
+        <!-- Model Restriction Section for Vertex -->
+        <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+          <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
+
+          <!-- Mode Toggle -->
+          <div class="mb-4 flex gap-2">
+            <button
+              type="button"
+              @click="modelRestrictionMode = 'whitelist'"
+              :class="[
+                'flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-all',
+                modelRestrictionMode === 'whitelist'
+                  ? 'bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
+              ]"
+            >
+              {{ t('admin.accounts.modelWhitelist') }}
+            </button>
+            <button
+              type="button"
+              @click="modelRestrictionMode = 'mapping'"
+              :class="[
+                'flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-all',
+                modelRestrictionMode === 'mapping'
+                  ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
+              ]"
+            >
+              {{ t('admin.accounts.modelMapping') }}
+            </button>
+          </div>
+
+          <!-- Whitelist Mode -->
+          <div v-if="modelRestrictionMode === 'whitelist'">
+            <ModelWhitelistSelector v-model="allowedModels" platform="anthropic" />
+            <p class="text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
+              <span v-if="allowedModels.length === 0">{{ t('admin.accounts.supportsAllModels') }}</span>
+            </p>
+          </div>
+
+          <!-- Mapping Mode -->
+          <div v-else class="space-y-3">
+            <div v-for="(mapping, index) in modelMappings" :key="index" class="flex items-center gap-2">
+              <input v-model="mapping.from" type="text" class="input flex-1" :placeholder="t('admin.accounts.fromModel')" />
+              <span class="text-gray-400">→</span>
+              <input v-model="mapping.to" type="text" class="input flex-1" :placeholder="t('admin.accounts.toModel')" />
+              <button type="button" @click="modelMappings.splice(index, 1)" class="text-red-500 hover:text-red-700">
+                <Icon name="trash" size="sm" />
+              </button>
+            </div>
+            <button type="button" @click="modelMappings.push({ from: '', to: '' })" class="btn btn-secondary text-sm">
+              + {{ t('admin.accounts.addMapping') }}
+            </button>
+            <!-- Vertex Preset Mappings -->
+            <div class="flex flex-wrap gap-2">
+              <button
+                v-for="preset in vertexPresets"
+                :key="preset.from"
+                type="button"
+                @click="addPresetMapping(preset.from, preset.to)"
+                :class="['rounded-lg px-3 py-1 text-xs transition-colors', preset.color]"
+              >
+                + {{ preset.label }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pool Mode Section for Vertex -->
+        <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+          <div class="mb-3 flex items-center justify-between">
+            <div>
+              <label class="input-label mb-0">{{ t('admin.accounts.poolMode') }}</label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.poolModeHint') }}
+              </p>
+            </div>
+            <button
+              type="button"
+              @click="poolModeEnabled = !poolModeEnabled"
+              :class="[
+                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+                poolModeEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+              ]"
+            >
+              <span
+                :class="[
+                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                  poolModeEnabled ? 'translate-x-5' : 'translate-x-0'
+                ]"
+              />
+            </button>
+          </div>
+          <div v-if="poolModeEnabled" class="rounded-lg bg-blue-50 p-3 dark:bg-blue-900/20">
+            <p class="text-xs text-blue-700 dark:text-blue-400">
+              <Icon name="exclamationCircle" size="sm" class="mr-1 inline" :stroke-width="2" />
+              {{ t('admin.accounts.poolModeInfo') }}
+            </p>
+          </div>
+          <div v-if="poolModeEnabled" class="mt-3">
+            <label class="input-label">{{ t('admin.accounts.poolModeRetryCount') }}</label>
+            <input
+              v-model.number="poolModeRetryCount"
+              type="number"
+              min="0"
+              :max="MAX_POOL_MODE_RETRY_COUNT"
+              step="1"
+              class="input"
+            />
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{
+                t('admin.accounts.poolModeRetryCountHint', {
+                  default: DEFAULT_POOL_MODE_RETRY_COUNT,
+                  max: MAX_POOL_MODE_RETRY_COUNT
+                })
+              }}
+            </p>
+          </div>
+        </div>
+      </div>
+
+      <!-- 配额控制 (Anthropic apikey/bedrock/vertex: 配额限制 + 亲和) -->
       <div
-        v-if="form.platform === 'anthropic' && (form.type === 'apikey' || form.type === 'bedrock')"
+        v-if="form.platform === 'anthropic' && (form.type === 'apikey' || form.type === 'bedrock' || form.type === 'vertex')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -1529,9 +1732,9 @@
         />
       </div>
 
-      <!-- 配额控制 (非 Anthropic apikey/bedrock) -->
+      <!-- 配额控制 (非 Anthropic apikey/bedrock/vertex) -->
       <div
-        v-else-if="form.type === 'apikey' || form.type === 'bedrock'"
+        v-else-if="form.type === 'apikey' || form.type === 'bedrock' || form.type === 'vertex'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -3045,7 +3248,7 @@ interface TempUnschedRuleForm {
 // State
 const step = ref(1)
 const submitting = ref(false)
-const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock'>('oauth-based') // UI selection for account category
+const accountCategory = ref<'oauth-based' | 'apikey' | 'bedrock' | 'vertex'>('oauth-based') // UI selection for account category
 const addMethod = ref<AddMethod>('oauth') // For oauth-based: 'oauth' or 'setup-token'
 const apiKeyBaseUrl = ref('https://api.anthropic.com')
 const apiKeyValue = ref('')
@@ -3100,6 +3303,7 @@ const antigravityWhitelistModels = ref<string[]>([])
 const antigravityModelMappings = ref<ModelMapping[]>([])
 const antigravityPresetMappings = computed(() => getPresetMappingsByPlatform('antigravity'))
 const bedrockPresets = computed(() => getPresetMappingsByPlatform('bedrock'))
+const vertexPresets = computed(() => getPresetMappingsByPlatform('vertex'))
 
 // Bedrock credentials
 const bedrockAuthMode = ref<'sigv4' | 'apikey'>('sigv4')
@@ -3109,6 +3313,11 @@ const bedrockSessionToken = ref('')
 const bedrockRegion = ref('us-east-1')
 const bedrockForceGlobal = ref(false)
 const bedrockApiKeyValue = ref('')
+
+// Vertex AI credentials
+const vertexServiceAccountJson = ref('')
+const vertexProjectId = ref('')
+const vertexRegion = ref('us-east5')
 const tempUnschedEnabled = ref(false)
 const tempUnschedRules = ref<TempUnschedRuleForm[]>([])
 const getModelMappingKey = createStableObjectKeyResolver<ModelMapping>('create-model-mapping')
@@ -3283,8 +3492,8 @@ const isOAuthFlow = computed(() => {
   if (form.platform === 'antigravity' && antigravityAccountType.value === 'upstream') {
     return false
   }
-  // Bedrock 类型不需要 OAuth 流程
-  if (form.platform === 'anthropic' && accountCategory.value === 'bedrock') {
+  // Bedrock / Vertex 类型不需要 OAuth 流程
+  if (form.platform === 'anthropic' && (accountCategory.value === 'bedrock' || accountCategory.value === 'vertex')) {
     return false
   }
   return accountCategory.value === 'oauth-based'
@@ -3356,6 +3565,11 @@ watch(
     // Bedrock 类型
     if (form.platform === 'anthropic' && category === 'bedrock') {
       form.type = 'bedrock' as AccountType
+      return
+    }
+    // Vertex 类型
+    if (form.platform === 'anthropic' && category === 'vertex') {
+      form.type = 'vertex' as AccountType
       return
     }
     if (category === 'oauth-based') {
@@ -4018,6 +4232,54 @@ const handleSubmit = async () => {
     return
   }
 
+  // For Vertex AI type, create directly
+  if (form.platform === 'anthropic' && accountCategory.value === 'vertex') {
+    if (!form.name.trim()) {
+      appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
+      return
+    }
+    if (!vertexServiceAccountJson.value.trim()) {
+      appStore.showError(t('admin.accounts.vertexServiceAccountJsonRequired'))
+      return
+    }
+    if (!vertexProjectId.value.trim()) {
+      appStore.showError(t('admin.accounts.vertexProjectIdRequired'))
+      return
+    }
+    // Light validation: SA JSON must parse (server will perform full JWTConfig validation).
+    try {
+      JSON.parse(vertexServiceAccountJson.value)
+    } catch {
+      appStore.showError(t('admin.accounts.vertexServiceAccountJsonInvalid'))
+      return
+    }
+
+    const credentials: Record<string, unknown> = {
+      gcp_service_account_json: vertexServiceAccountJson.value,
+      gcp_project_id: vertexProjectId.value.trim(),
+      gcp_region: vertexRegion.value.trim() || 'us-east5',
+    }
+
+    // Model mapping
+    const modelMapping = buildModelMappingObject(
+      modelRestrictionMode.value, allowedModels.value, modelMappings.value
+    )
+    if (modelMapping) {
+      credentials.model_mapping = modelMapping
+    }
+
+    // Pool mode
+    if (poolModeEnabled.value) {
+      credentials.pool_mode = true
+      credentials.pool_mode_retry_count = normalizePoolModeRetryCount(poolModeRetryCount.value)
+    }
+
+    applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
+
+    await createAccountAndFinish('anthropic', 'vertex' as AccountType, credentials)
+    return
+  }
+
   // For Antigravity upstream type, create directly
   if (form.platform === 'antigravity' && antigravityAccountType.value === 'upstream') {
     if (!form.name.trim()) {
@@ -4166,9 +4428,9 @@ const createAccountAndFinish = async (
   if (!applyTempUnschedConfig(credentials)) {
     return
   }
-  // Inject quota limits for apikey/bedrock accounts
+  // Inject quota limits for apikey/bedrock/vertex accounts
   let finalExtra = extra
-  if (type === 'apikey' || type === 'bedrock') {
+  if (type === 'apikey' || type === 'bedrock' || type === 'vertex') {
     const quotaExtra: Record<string, unknown> = { ...(extra || {}) }
     if (editQuotaLimit.value != null && editQuotaLimit.value > 0) {
       quotaExtra.quota_limit = editQuotaLimit.value

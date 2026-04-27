@@ -761,6 +761,161 @@
         </div>
       </div>
 
+      <!-- Vertex AI fields (for vertex type) -->
+      <div v-if="account.type === 'vertex'" class="space-y-4">
+        <!-- Service Account JSON -->
+        <div>
+          <label class="input-label">{{ t('admin.accounts.vertexServiceAccountJson') }}</label>
+          <textarea
+            v-model="editVertexServiceAccountJson"
+            rows="6"
+            class="input font-mono text-xs"
+            :placeholder="t('admin.accounts.leaveEmptyToKeep')"
+          ></textarea>
+          <p class="input-hint">{{ t('admin.accounts.leaveEmptyToKeep') }}</p>
+        </div>
+
+        <!-- Project ID -->
+        <div>
+          <label class="input-label">{{ t('admin.accounts.vertexProjectId') }}</label>
+          <input
+            v-model="editVertexProjectId"
+            type="text"
+            class="input font-mono"
+            placeholder="my-gcp-project"
+          />
+        </div>
+
+        <!-- Region -->
+        <div>
+          <label class="input-label">{{ t('admin.accounts.vertexRegion') }}</label>
+          <input
+            v-model="editVertexRegion"
+            type="text"
+            class="input"
+            placeholder="us-east5"
+          />
+          <p class="input-hint">{{ t('admin.accounts.vertexRegionHint') }}</p>
+        </div>
+
+        <!-- Model Restriction for Vertex -->
+        <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+          <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
+
+          <div class="mb-4 flex gap-2">
+            <button
+              type="button"
+              @click="modelRestrictionMode = 'whitelist'"
+              :class="[
+                'flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-all',
+                modelRestrictionMode === 'whitelist'
+                  ? 'bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
+              ]"
+            >
+              {{ t('admin.accounts.modelWhitelist') }}
+            </button>
+            <button
+              type="button"
+              @click="modelRestrictionMode = 'mapping'"
+              :class="[
+                'flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-all',
+                modelRestrictionMode === 'mapping'
+                  ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
+              ]"
+            >
+              {{ t('admin.accounts.modelMapping') }}
+            </button>
+          </div>
+
+          <div v-if="modelRestrictionMode === 'whitelist'">
+            <ModelWhitelistSelector v-model="allowedModels" platform="anthropic" />
+            <p class="text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
+              <span v-if="allowedModels.length === 0">{{ t('admin.accounts.supportsAllModels') }}</span>
+            </p>
+          </div>
+
+          <div v-else class="space-y-3">
+            <div v-for="(mapping, index) in modelMappings" :key="getModelMappingKey(mapping)" class="flex items-center gap-2">
+              <input v-model="mapping.from" type="text" class="input flex-1" :placeholder="t('admin.accounts.fromModel')" />
+              <span class="text-gray-400">→</span>
+              <input v-model="mapping.to" type="text" class="input flex-1" :placeholder="t('admin.accounts.toModel')" />
+              <button type="button" @click="removeModelMapping(index)" class="text-red-500 hover:text-red-700">
+                <Icon name="trash" size="sm" />
+              </button>
+            </div>
+            <button type="button" @click="addModelMapping" class="btn btn-secondary text-sm">
+              + {{ t('admin.accounts.addMapping') }}
+            </button>
+            <div class="flex flex-wrap gap-2">
+              <button
+                v-for="preset in vertexPresets"
+                :key="preset.from"
+                type="button"
+                @click="addPresetMapping(preset.from, preset.to)"
+                :class="['rounded-lg px-3 py-1 text-xs transition-colors', preset.color]"
+              >
+                + {{ preset.label }}
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Pool Mode Section for Vertex -->
+        <div class="border-t border-gray-200 pt-4 dark:border-dark-600">
+          <div class="mb-3 flex items-center justify-between">
+            <div>
+              <label class="input-label mb-0">{{ t('admin.accounts.poolMode') }}</label>
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                {{ t('admin.accounts.poolModeHint') }}
+              </p>
+            </div>
+            <button
+              type="button"
+              @click="poolModeEnabled = !poolModeEnabled"
+              :class="[
+                'relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2',
+                poolModeEnabled ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'
+              ]"
+            >
+              <span
+                :class="[
+                  'pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out',
+                  poolModeEnabled ? 'translate-x-5' : 'translate-x-0'
+                ]"
+              />
+            </button>
+          </div>
+          <div v-if="poolModeEnabled" class="rounded-lg bg-blue-50 p-3 dark:bg-blue-900/20">
+            <p class="text-xs text-blue-700 dark:text-blue-400">
+              <Icon name="exclamationCircle" size="sm" class="mr-1 inline" :stroke-width="2" />
+              {{ t('admin.accounts.poolModeInfo') }}
+            </p>
+          </div>
+          <div v-if="poolModeEnabled" class="mt-3">
+            <label class="input-label">{{ t('admin.accounts.poolModeRetryCount') }}</label>
+            <input
+              v-model.number="poolModeRetryCount"
+              type="number"
+              min="0"
+              :max="MAX_POOL_MODE_RETRY_COUNT"
+              step="1"
+              class="input"
+            />
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{
+                t('admin.accounts.poolModeRetryCountHint', {
+                  default: DEFAULT_POOL_MODE_RETRY_COUNT,
+                  max: MAX_POOL_MODE_RETRY_COUNT
+                })
+              }}
+            </p>
+          </div>
+        </div>
+      </div>
+
       <!-- Antigravity model restriction (applies to all antigravity types) -->
       <!-- Antigravity 只支持模型映射模式，不支持白名单模式 -->
       <div v-if="account.platform === 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
@@ -1173,9 +1328,9 @@
         </div>
       </div>
 
-      <!-- 配额控制 (Anthropic apikey/bedrock: 配额限制 + 亲和) -->
+      <!-- 配额控制 (Anthropic apikey/bedrock/vertex: 配额限制 + 亲和) -->
       <div
-        v-if="account?.platform === 'anthropic' && (account?.type === 'apikey' || account?.type === 'bedrock')"
+        v-if="account?.platform === 'anthropic' && (account?.type === 'apikey' || account?.type === 'bedrock' || account?.type === 'vertex')"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -1224,9 +1379,9 @@
           @update:quotaNotifyTotalThresholdType="quotaNotifyState.total.thresholdType = $event"
         />
       </div>
-      <!-- 配额控制 (非 Anthropic apikey/bedrock) -->
+      <!-- 配额控制 (非 Anthropic apikey/bedrock/vertex) -->
       <div
-        v-else-if="account?.type === 'apikey' || account?.type === 'bedrock'"
+        v-else-if="account?.type === 'apikey' || account?.type === 'bedrock' || account?.type === 'vertex'"
         class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
       >
         <div class="mb-3">
@@ -1904,6 +2059,7 @@ const baseUrlHint = computed(() => {
 
 const antigravityPresetMappings = computed(() => getPresetMappingsByPlatform('antigravity'))
 const bedrockPresets = computed(() => getPresetMappingsByPlatform('bedrock'))
+const vertexPresets = computed(() => getPresetMappingsByPlatform('vertex'))
 
 // Model mapping type
 interface ModelMapping {
@@ -1933,6 +2089,10 @@ const isBedrockAPIKeyMode = computed(() =>
   props.account?.type === 'bedrock' &&
   (props.account?.credentials as Record<string, unknown>)?.auth_mode === 'apikey'
 )
+// Vertex AI credentials
+const editVertexServiceAccountJson = ref('')
+const editVertexProjectId = ref('')
+const editVertexRegion = ref('')
 const modelMappings = ref<ModelMapping[]>([])
 const modelRestrictionMode = ref<'whitelist' | 'mapping'>('whitelist')
 const allowedModels = ref<string[]>([])
@@ -2213,8 +2373,8 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     }
   }
 
-  // Load quota limit for apikey/bedrock accounts (bedrock quota is also loaded in its own branch above)
-  if (newAccount.type === 'apikey' || newAccount.type === 'bedrock') {
+  // Load quota limit for apikey/bedrock/vertex accounts (bedrock/vertex quota also loaded in their own branches below)
+  if (newAccount.type === 'apikey' || newAccount.type === 'bedrock' || newAccount.type === 'vertex') {
     const quotaVal = extra?.quota_limit as number | undefined
     editQuotaLimit.value = (quotaVal && quotaVal > 0) ? quotaVal : null
     const dailyVal = extra?.quota_daily_limit as number | undefined
@@ -2360,6 +2520,44 @@ const syncFormFromAccount = (newAccount: Account | null) => {
 
     // Load model mappings for bedrock
     const existingMappings = bedrockCreds.model_mapping as Record<string, string> | undefined
+    if (existingMappings && typeof existingMappings === 'object') {
+      const entries = Object.entries(existingMappings)
+      const isWhitelistMode = entries.length > 0 && entries.every(([from, to]) => from === to)
+      if (isWhitelistMode) {
+        modelRestrictionMode.value = 'whitelist'
+        allowedModels.value = entries.map(([from]) => from)
+        modelMappings.value = []
+      } else {
+        modelRestrictionMode.value = 'mapping'
+        modelMappings.value = entries.map(([from, to]) => ({ from, to }))
+        allowedModels.value = []
+      }
+    } else {
+      modelRestrictionMode.value = 'whitelist'
+      modelMappings.value = []
+      allowedModels.value = []
+    }
+  } else if (newAccount.type === 'vertex' && newAccount.credentials) {
+    const vertexCreds = newAccount.credentials as Record<string, unknown>
+    editVertexProjectId.value = (vertexCreds.gcp_project_id as string) || ''
+    editVertexRegion.value = (vertexCreds.gcp_region as string) || ''
+    // SA JSON intentionally NOT prefilled — sensitive credential, "leave empty to keep" semantics
+    editVertexServiceAccountJson.value = ''
+
+    // Pool mode for vertex
+    poolModeEnabled.value = vertexCreds.pool_mode === true
+    const retryCount = vertexCreds.pool_mode_retry_count
+    poolModeRetryCount.value = (typeof retryCount === 'number' && retryCount >= 0) ? retryCount : DEFAULT_POOL_MODE_RETRY_COUNT
+
+    // Quota limits for vertex (extra)
+    const vertexExtra = (newAccount.extra as Record<string, unknown>) || {}
+    editQuotaLimit.value = typeof vertexExtra.quota_limit === 'number' ? vertexExtra.quota_limit : null
+    editQuotaDailyLimit.value = typeof vertexExtra.quota_daily_limit === 'number' ? vertexExtra.quota_daily_limit : null
+    editQuotaWeeklyLimit.value = typeof vertexExtra.quota_weekly_limit === 'number' ? vertexExtra.quota_weekly_limit : null
+    loadQuotaNotifyFromExtra(vertexExtra)
+
+    // Model mapping
+    const existingMappings = vertexCreds.model_mapping as Record<string, string> | undefined
     if (existingMappings && typeof existingMappings === 'object') {
       const entries = Object.entries(existingMappings)
       const isWhitelistMode = entries.length > 0 && entries.every(([from, to]) => from === to)
@@ -3005,6 +3203,46 @@ const handleSubmit = async () => {
       }
 
       updatePayload.credentials = newCredentials
+    } else if (props.account.type === 'vertex') {
+      const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
+      const newCredentials: Record<string, unknown> = { ...currentCredentials }
+
+      // Only overwrite SA JSON when user provided a new value (sensitive, "leave empty to keep")
+      if (editVertexServiceAccountJson.value.trim()) {
+        try {
+          JSON.parse(editVertexServiceAccountJson.value)
+        } catch {
+          appStore.showError(t('admin.accounts.vertexServiceAccountJsonInvalid'))
+          return
+        }
+        newCredentials.gcp_service_account_json = editVertexServiceAccountJson.value
+      }
+      newCredentials.gcp_project_id = editVertexProjectId.value.trim()
+      newCredentials.gcp_region = editVertexRegion.value.trim() || 'us-east5'
+
+      // Pool mode
+      if (poolModeEnabled.value) {
+        newCredentials.pool_mode = true
+        newCredentials.pool_mode_retry_count = normalizePoolModeRetryCount(poolModeRetryCount.value)
+      } else {
+        delete newCredentials.pool_mode
+        delete newCredentials.pool_mode_retry_count
+      }
+
+      // Model mapping
+      const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
+      if (modelMapping) {
+        newCredentials.model_mapping = modelMapping
+      } else {
+        delete newCredentials.model_mapping
+      }
+
+      applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
+      if (!applyTempUnschedConfig(newCredentials)) {
+        return
+      }
+
+      updatePayload.credentials = newCredentials
     } else {
       // For oauth/setup-token types, only update intercept_warmup_requests if changed
       const currentCredentials = (props.account.credentials as Record<string, unknown>) || {}
@@ -3223,8 +3461,8 @@ const handleSubmit = async () => {
       updatePayload.extra = newExtra
     }
 
-    // For apikey/bedrock accounts, handle quota_limit in extra
-    if (props.account.type === 'apikey' || props.account.type === 'bedrock') {
+    // For apikey/bedrock/vertex accounts, handle quota_limit in extra
+    if (props.account.type === 'apikey' || props.account.type === 'bedrock' || props.account.type === 'vertex') {
       const currentExtra = (updatePayload.extra as Record<string, unknown>) ||
         (props.account.extra as Record<string, unknown>) || {}
       const newExtra: Record<string, unknown> = { ...currentExtra }

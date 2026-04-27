@@ -320,6 +320,16 @@ const bedrockPresetMappings = [
   { label: 'Haiku 4.5', from: 'claude-haiku-4-5', to: 'us.anthropic.claude-haiku-4-5-20251001-v1:0', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400' },
 ]
 
+// Vertex 预设映射（与后端 DefaultVertexModelMapping 保持一致；Vertex 使用 @日期 后缀）
+const vertexPresetMappings = [
+  { label: 'Opus 4.1', from: 'claude-opus-4-1', to: 'claude-opus-4-1@20250805', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'Opus 4', from: 'claude-opus-4', to: 'claude-opus-4@20250514', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'Sonnet 4.5', from: 'claude-sonnet-4-5', to: 'claude-sonnet-4-5@20250929', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  { label: 'Sonnet 4', from: 'claude-sonnet-4', to: 'claude-sonnet-4@20250514', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+  { label: 'Haiku 4.5', from: 'claude-haiku-4-5', to: 'claude-haiku-4-5@20251001', color: 'bg-green-100 text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400' },
+  { label: 'Sonnet 3.7', from: 'claude-3-7-sonnet', to: 'claude-3-7-sonnet@20250219', color: 'bg-cyan-100 text-cyan-700 hover:bg-cyan-200 dark:bg-cyan-900/30 dark:text-cyan-400' },
+]
+
 // Antigravity 默认映射（从后端 API 获取，与 constants.go 保持一致）
 // 使用 fetchAntigravityDefaultMappings() 异步获取
 import { getAntigravityDefaultModelMapping } from '@/api/admin/accounts'
@@ -391,6 +401,7 @@ export function getPresetMappingsByPlatform(platform: string) {
   if (platform === 'gemini') return geminiPresetMappings
   if (platform === 'antigravity') return antigravityPresetMappings
   if (platform === 'bedrock') return bedrockPresetMappings
+  if (platform === 'vertex') return vertexPresetMappings
   return anthropicPresetMappings
 }
 
