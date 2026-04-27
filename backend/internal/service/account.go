@@ -124,7 +124,7 @@ func (a *Account) IsSchedulable() bool {
 	if a.TempUnschedulableUntil != nil && now.Before(*a.TempUnschedulableUntil) {
 		return false
 	}
-	if a.IsAPIKeyOrBedrock() && a.IsQuotaExceeded() {
+	if a.SupportsAccountQuota() && a.IsQuotaExceeded() {
 		return false
 	}
 	return true
@@ -713,10 +713,10 @@ func (a *Account) IsCustomErrorCodesEnabled() bool {
 	return false
 }
 
-// IsPoolMode 检查 API Key 账号是否启用池模式。
+// IsPoolMode 检查账号是否启用池模式（仅对支持账号级配额的类型生效）。
 // 池模式下，上游错误不标记本地账号状态，而是在同一账号上重试。
 func (a *Account) IsPoolMode() bool {
-	if !a.IsAPIKeyOrBedrock() || a.Credentials == nil {
+	if !a.SupportsAccountQuota() || a.Credentials == nil {
 		return false
 	}
 	if v, ok := a.Credentials["pool_mode"]; ok {
@@ -838,9 +838,17 @@ func (a *Account) IsBedrockAPIKey() bool {
 	return a.IsBedrock() && a.GetCredential("auth_mode") == "apikey"
 }
 
-// IsAPIKeyOrBedrock 返回账号类型是否支持配额和池模式等特性
-func (a *Account) IsAPIKeyOrBedrock() bool {
-	return a.Type == AccountTypeAPIKey || a.Type == AccountTypeBedrock
+// IsVertex 判断账号是否为 Google Vertex AI 类型（Platform=anthropic + Type=vertex）。
+// Vertex 提供托管的 Anthropic Claude 模型，与 Bedrock 同构但鉴权走 GCP OAuth2。
+func (a *Account) IsVertex() bool {
+	return a.Platform == PlatformAnthropic && a.Type == AccountTypeVertex
+}
+
+// SupportsAccountQuota 返回账号类型是否支持账号级配额、池模式等"用户配置上游凭据"特性。
+// 满足条件的类型：apikey / bedrock / vertex —— 它们都通过用户提供的凭据访问上游，
+// 与 OAuth/SetupToken（用户个人 token）形成对照。
+func (a *Account) SupportsAccountQuota() bool {
+	return domain.SupportsAccountQuotaType(a.Type)
 }
 
 func (a *Account) IsOpenAI() bool {
