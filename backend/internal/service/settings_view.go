@@ -348,6 +348,7 @@ const (
 	BetaPolicyScopeOAuth   = "oauth"   // 仅 OAuth 账号
 	BetaPolicyScopeAPIKey  = "apikey"  // 仅 API Key 账号
 	BetaPolicyScopeBedrock = "bedrock" // 仅 AWS Bedrock 账号
+	BetaPolicyScopeVertex  = "vertex"  // 仅 Google Vertex AI 账号
 )
 
 // BetaPolicyRule 单条 Beta 策略规则

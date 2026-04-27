@@ -19,6 +19,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -575,6 +576,11 @@ type GatewayService struct {
 	debugGatewayBodyFile  atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
+
+	// vertexTokenProvider 缓存每个 Vertex 账号的 OAuth2 TokenSource。
+	// 通过 sync.Once 懒加载，避免修改 NewGatewayService 签名（与现网部署兼容）。
+	vertexTokenProviderOnce sync.Once
+	vertexTokenProvider     *VertexTokenProvider
 }
 
 // NewGatewayService creates a new GatewayService
@@ -3681,6 +3687,10 @@ func (s *GatewayService) isModelSupportedByAccount(account *Account, requestedMo
 		_, ok := ResolveBedrockModelID(account, requestedModel)
 		return ok
 	}
+	if account.IsVertex() {
+		_, ok := ResolveVertexModelID(account, requestedModel)
+		return ok
+	}
 	// OpenAI 透传模式：仅替换认证，允许所有模型
 	if account.Platform == PlatformOpenAI && account.IsOpenAIPassthroughEnabled() {
 		return true
@@ -3707,6 +3717,8 @@ func (s *GatewayService) GetAccessToken(ctx context.Context, account *Account) (
 		return apiKey, "apikey", nil
 	case AccountTypeBedrock:
 		return "", "bedrock", nil // Bedrock 使用 SigV4 签名或 API Key，由 forwardBedrock 处理
+	case AccountTypeVertex:
+		return "", "vertex", nil // Vertex AI 使用 GCP OAuth2 access token，由 forwardVertex 处理
 	default:
 		return "", "", fmt.Errorf("unsupported account type: %s", account.Type)
 	}
@@ -4223,6 +4235,10 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	if account != nil && account.IsBedrock() {
 		return s.forwardBedrock(ctx, c, account, parsed, startTime)
+	}
+
+	if account != nil && account.IsVertex() {
+		return s.forwardVertex(ctx, c, account, parsed, startTime)
 	}
 
 	// Beta policy: evaluate once; block check + cache filter set for buildUpstreamRequest.
@@ -5800,6 +5816,315 @@ func (s *GatewayService) handleBedrockNonStreamingResponse(
 	return usage, nil
 }
 
+// ============================== Vertex AI ==============================
+
+// getVertexTokenProvider 懒加载 Vertex token provider，与 GatewayService 生命周期一致。
+// 不在 NewGatewayService 中初始化是为了避免修改构造函数签名（向后兼容已有部署）。
+func (s *GatewayService) getVertexTokenProvider() *VertexTokenProvider {
+	s.vertexTokenProviderOnce.Do(func() {
+		s.vertexTokenProvider = NewVertexTokenProvider()
+	})
+	return s.vertexTokenProvider
+}
+
+// forwardVertex 转发请求到 Google Vertex AI（Anthropic publisher 模型）。
+// 与 forwardBedrock 同构：解析模型 → 准备 body → 取 OAuth2 access token → 发送 → 处理响应。
+// Vertex 与 Bedrock 的差别：
+//   - 鉴权：GCP OAuth2 Bearer（VertexTokenProvider 自动刷新）
+//   - 流式：标准 SSE（无需自定义解码器）
+//   - body：注入 anthropic_version、剥 model/stream（PrepareVertexRequestBody 处理）
+func (s *GatewayService) forwardVertex(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	parsed *ParsedRequest,
+	startTime time.Time,
+) (*ForwardResult, error) {
+	reqModel := parsed.Model
+	reqStream := parsed.Stream
+	body := parsed.Body
+
+	projectID := vertexProjectID(account)
+	if projectID == "" {
+		return nil, fmt.Errorf("vertex: gcp_project_id not configured for account %d", account.ID)
+	}
+	region := vertexRegion(account)
+	if region == "" {
+		return nil, fmt.Errorf("vertex: gcp_region not configured for account %d", account.ID)
+	}
+
+	mappedModel, ok := ResolveVertexModelID(account, reqModel)
+	if !ok {
+		return nil, fmt.Errorf("unsupported vertex model: %s", reqModel)
+	}
+	if mappedModel != reqModel {
+		logger.LegacyPrintf("service.gateway", "[Vertex] Model mapping: %s -> %s (account: %s)", reqModel, mappedModel, account.Name)
+	}
+
+	vertexBody, err := PrepareVertexRequestBody(body)
+	if err != nil {
+		return nil, fmt.Errorf("prepare vertex request body: %w", err)
+	}
+
+	accessToken, err := s.getVertexTokenProvider().GetAccessToken(ctx, account)
+	if err != nil {
+		return nil, fmt.Errorf("vertex: obtain access token: %w", err)
+	}
+
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+
+	logger.LegacyPrintf("service.gateway", "[Vertex] 命中 Vertex 分支: account=%d name=%s project=%s region=%s model=%s->%s stream=%v",
+		account.ID, account.Name, projectID, region, reqModel, mappedModel, reqStream)
+
+	resp, err := s.executeVertexUpstream(ctx, c, account, vertexBody, mappedModel, projectID, region, reqStream, accessToken, proxyURL)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode >= 400 {
+		return s.handleVertexUpstreamErrors(ctx, resp, c, account)
+	}
+
+	var usage *ClaudeUsage
+	var firstTokenMs *int
+	var clientDisconnect bool
+	if reqStream {
+		streamResult, err := s.handleVertexStreamingResponse(ctx, resp, c, account, startTime, reqModel)
+		if err != nil {
+			return nil, err
+		}
+		usage = streamResult.usage
+		firstTokenMs = streamResult.firstTokenMs
+		clientDisconnect = streamResult.clientDisconnect
+	} else {
+		usage, err = s.handleVertexNonStreamingResponse(ctx, resp, c, account)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if usage == nil {
+		usage = &ClaudeUsage{}
+	}
+
+	return &ForwardResult{
+		RequestID:        resp.Header.Get("x-request-id"),
+		Usage:            *usage,
+		Model:            reqModel,
+		UpstreamModel:    mappedModel,
+		Stream:           reqStream,
+		Duration:         time.Since(startTime),
+		FirstTokenMs:     firstTokenMs,
+		ClientDisconnect: clientDisconnect,
+	}, nil
+}
+
+// executeVertexUpstream 执行 Vertex 上游请求（含重试逻辑）。
+// 重试策略与 Bedrock 一致：5xx / shouldRetry 命中时退避重试，最多 maxRetryAttempts 次。
+func (s *GatewayService) executeVertexUpstream(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	modelID string,
+	projectID string,
+	region string,
+	stream bool,
+	accessToken string,
+	proxyURL string,
+) (*http.Response, error) {
+	var resp *http.Response
+	var err error
+	retryStart := time.Now()
+	for attempt := 1; attempt <= maxRetryAttempts; attempt++ {
+		upstreamReq, buildErr := s.buildUpstreamRequestVertex(ctx, body, projectID, region, modelID, stream, accessToken)
+		if buildErr != nil {
+			return nil, buildErr
+		}
+
+		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, nil)
+		if err != nil {
+			if resp != nil && resp.Body != nil {
+				_ = resp.Body.Close()
+			}
+			safeErr := sanitizeUpstreamErrorMessage(err.Error())
+			setOpsUpstreamError(c, 0, safeErr, "")
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				Platform:           account.Platform,
+				AccountID:          account.ID,
+				AccountName:        account.Name,
+				UpstreamStatusCode: 0,
+				UpstreamURL:        safeUpstreamURL(upstreamReq.URL.String()),
+				Kind:               "request_error",
+				Message:            safeErr,
+			})
+			c.JSON(http.StatusBadGateway, gin.H{
+				"type": "error",
+				"error": gin.H{
+					"type":    "upstream_error",
+					"message": "Upstream request failed",
+				},
+			})
+			return nil, fmt.Errorf("upstream request failed: %s", safeErr)
+		}
+
+		if resp.StatusCode >= 400 && resp.StatusCode != 400 && s.shouldRetryUpstreamError(account, resp.StatusCode) {
+			if attempt < maxRetryAttempts {
+				elapsed := time.Since(retryStart)
+				if elapsed >= maxRetryElapsed {
+					break
+				}
+
+				delay := retryBackoffDelay(attempt)
+				remaining := maxRetryElapsed - elapsed
+				if delay > remaining {
+					delay = remaining
+				}
+				if delay <= 0 {
+					break
+				}
+
+				respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+				_ = resp.Body.Close()
+				appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+					Platform:           account.Platform,
+					AccountID:          account.ID,
+					AccountName:        account.Name,
+					UpstreamStatusCode: resp.StatusCode,
+					UpstreamURL:        safeUpstreamURL(upstreamReq.URL.String()),
+					Kind:               "retry",
+					Message:            extractUpstreamErrorMessage(respBody),
+					Detail: func() string {
+						if s.cfg != nil && s.cfg.Gateway.LogUpstreamErrorBody {
+							return truncateString(string(respBody), s.cfg.Gateway.LogUpstreamErrorBodyMaxBytes)
+						}
+						return ""
+					}(),
+				})
+				logger.LegacyPrintf("service.gateway", "[Vertex] account %d: upstream error %d, retry %d/%d after %v",
+					account.ID, resp.StatusCode, attempt, maxRetryAttempts, delay)
+				if err := sleepWithContext(ctx, delay); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			break
+		}
+
+		break
+	}
+	if resp == nil || resp.Body == nil {
+		return nil, errors.New("upstream request failed: empty response")
+	}
+	return resp, nil
+}
+
+// buildUpstreamRequestVertex 构建 Vertex AI 上游请求：URL + Bearer + JSON body。
+// anthropic-beta 头若客户端发了，会随上游请求一起转发（Vertex 透传给 Anthropic 模型）。
+func (s *GatewayService) buildUpstreamRequestVertex(
+	ctx context.Context,
+	body []byte,
+	projectID string,
+	region string,
+	modelID string,
+	stream bool,
+	accessToken string,
+) (*http.Request, error) {
+	targetURL := BuildVertexURL(projectID, region, modelID, stream)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	attachVertexAuth(req, accessToken)
+
+	return req, nil
+}
+
+// handleVertexUpstreamErrors 处理 Vertex 上游 4xx/5xx 错误（failover + 错误响应）。
+// 与 Bedrock 同构。
+func (s *GatewayService) handleVertexUpstreamErrors(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+) (*ForwardResult, error) {
+	// retry exhausted + failover
+	if s.shouldRetryUpstreamError(account, resp.StatusCode) {
+		if s.shouldFailoverUpstreamError(resp.StatusCode) {
+			respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+			_ = resp.Body.Close()
+			resp.Body = io.NopCloser(bytes.NewReader(respBody))
+
+			s.handleFailoverSideEffects(ctx, resp, account)
+			appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+				Platform:           account.Platform,
+				AccountID:          account.ID,
+				AccountName:        account.Name,
+				UpstreamStatusCode: resp.StatusCode,
+				Kind:               "retry_exhausted_failover",
+				Message:            extractUpstreamErrorMessage(respBody),
+			})
+			return nil, &UpstreamFailoverError{
+				StatusCode:             resp.StatusCode,
+				ResponseBody:           respBody,
+				RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+			}
+		}
+		return s.handleErrorResponse(ctx, resp, c, account)
+	}
+
+	// non-retryable failover
+	if s.shouldFailoverUpstreamError(resp.StatusCode) {
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(respBody))
+
+		s.handleFailoverSideEffects(ctx, resp, account)
+		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
+			Platform:           account.Platform,
+			AccountID:          account.ID,
+			AccountName:        account.Name,
+			UpstreamStatusCode: resp.StatusCode,
+			Kind:               "failover",
+			Message:            extractUpstreamErrorMessage(respBody),
+		})
+		return nil, &UpstreamFailoverError{
+			StatusCode:             resp.StatusCode,
+			ResponseBody:           respBody,
+			RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
+		}
+	}
+
+	return s.handleErrorResponse(ctx, resp, c, account)
+}
+
+// handleVertexNonStreamingResponse 处理 Vertex :rawPredict 非流式响应。
+// 响应体格式与 Anthropic Messages 完全一致，可直接透传给客户端。
+func (s *GatewayService) handleVertexNonStreamingResponse(
+	ctx context.Context,
+	resp *http.Response,
+	c *gin.Context,
+	account *Account,
+) (*ClaudeUsage, error) {
+	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, anthropicTooLargeError)
+	if err != nil {
+		return nil, err
+	}
+
+	usage := parseClaudeUsageFromResponseBody(body)
+
+	c.Header("Content-Type", "application/json")
+	c.Data(resp.StatusCode, "application/json", body)
+	return usage, nil
+}
+
 func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, tokenType, modelID string, reqStream bool, mimicClaudeCode bool) (*http.Request, error) {
 	// Defensive safety net (v0.1.126+): if the caller passed mimicClaudeCode=false
 	// for an OAuth account whose client UA is NOT `claude-cli/X.Y.Z`, we force mimic
@@ -6216,9 +6541,10 @@ func (s *GatewayService) evaluateBetaPolicy(ctx context.Context, betaHeader stri
 	}
 	isOAuth := account.IsOAuth()
 	isBedrock := account.IsBedrock()
+	isVertex := account.IsVertex()
 	var result betaPolicyResult
 	for _, rule := range settings.Rules {
-		if !betaPolicyScopeMatches(rule.Scope, isOAuth, isBedrock) {
+		if !betaPolicyScopeMatches(rule.Scope, isOAuth, isBedrock, isVertex) {
 			continue
 		}
 		effectiveAction, effectiveErrMsg := resolveRuleAction(rule, model)
@@ -6279,16 +6605,21 @@ func (s *GatewayService) getBetaPolicyFilterSet(ctx context.Context, c *gin.Cont
 }
 
 // betaPolicyScopeMatches checks whether a rule's scope matches the current account type.
-func betaPolicyScopeMatches(scope string, isOAuth bool, isBedrock bool) bool {
+// isVertex was added alongside isBedrock so beta-policy rules can target Vertex
+// accounts independently from API-Key / Bedrock; the apikey scope now also
+// excludes vertex (matching its existing exclusion of bedrock).
+func betaPolicyScopeMatches(scope string, isOAuth bool, isBedrock bool, isVertex bool) bool {
 	switch scope {
 	case BetaPolicyScopeAll:
 		return true
 	case BetaPolicyScopeOAuth:
 		return isOAuth
 	case BetaPolicyScopeAPIKey:
-		return !isOAuth && !isBedrock
+		return !isOAuth && !isBedrock && !isVertex
 	case BetaPolicyScopeBedrock:
 		return isBedrock
+	case BetaPolicyScopeVertex:
+		return isVertex
 	default:
 		return true // unknown scope → match all (fail-open)
 	}
@@ -6398,13 +6729,14 @@ func (s *GatewayService) checkBetaPolicyBlockForTokens(ctx context.Context, toke
 	}
 	isOAuth := account.IsOAuth()
 	isBedrock := account.IsBedrock()
+	isVertex := account.IsVertex()
 	tokenSet := buildBetaTokenSet(tokens)
 	for _, rule := range settings.Rules {
 		effectiveAction, effectiveErrMsg := resolveRuleAction(rule, model)
 		if effectiveAction != BetaPolicyActionBlock {
 			continue
 		}
-		if !betaPolicyScopeMatches(rule.Scope, isOAuth, isBedrock) {
+		if !betaPolicyScopeMatches(rule.Scope, isOAuth, isBedrock, isVertex) {
 			continue
 		}
 		if _, present := tokenSet[rule.BetaToken]; present {
@@ -8563,6 +8895,12 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	// Bedrock 不支持 count_tokens 端点
 	if account != nil && account.IsBedrock() {
 		s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported for Bedrock")
+		return nil
+	}
+
+	// Vertex AI 不支持 count_tokens 端点
+	if account != nil && account.IsVertex() {
+		s.countTokensError(c, http.StatusNotFound, "not_found_error", "count_tokens endpoint is not supported for Vertex AI")
 		return nil
 	}
 
