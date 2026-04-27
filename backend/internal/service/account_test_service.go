@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -68,6 +69,11 @@ type AccountTestService struct {
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	tlsFPProfileService       *TLSFingerprintProfileService
+
+	// vertexTokenProvider lazy-loaded for Vertex account health checks.
+	// Not a constructor parameter to keep wire-up backward compatible.
+	vertexTokenProviderOnce sync.Once
+	vertexTokenProvider     *VertexTokenProvider
 }
 
 // NewAccountTestService creates a new AccountTestService
@@ -208,6 +214,11 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	// Bedrock accounts use a separate test path
 	if account.IsBedrock() {
 		return s.testBedrockAccountConnection(c, ctx, account, testModelID)
+	}
+
+	// Vertex AI accounts use a separate test path (different auth + endpoint shape)
+	if account.IsVertex() {
+		return s.testVertexAccountConnection(c, ctx, account, testModelID)
 	}
 
 	// Determine authentication method and API URL
@@ -393,6 +404,115 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 	}
 
 	// Bedrock non-streaming response is standard Claude JSON, extract the text
+	var result struct {
+		Content []struct {
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to parse response: %s", err.Error()))
+	}
+
+	text := ""
+	if len(result.Content) > 0 {
+		text = result.Content[0].Text
+	}
+	if text == "" {
+		text = "(empty response)"
+	}
+
+	s.sendEvent(c, TestEvent{Type: "content", Text: text})
+	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+	return nil
+}
+
+// getVertexTokenProvider lazy-loads the Vertex token provider for the test path.
+func (s *AccountTestService) getVertexTokenProvider() *VertexTokenProvider {
+	s.vertexTokenProviderOnce.Do(func() {
+		s.vertexTokenProvider = NewVertexTokenProvider()
+	})
+	return s.vertexTokenProvider
+}
+
+// testVertexAccountConnection tests a Vertex AI account by issuing a minimal
+// non-streaming :rawPredict against the configured project/region with a
+// 1-token Claude prompt. Validates SA-JSON parsing, token fetch, and that
+// the requested model is actually available in the configured region.
+func (s *AccountTestService) testVertexAccountConnection(c *gin.Context, ctx context.Context, account *Account, testModelID string) error {
+	projectID := vertexProjectID(account)
+	if projectID == "" {
+		return s.sendErrorAndEnd(c, "gcp_project_id not configured")
+	}
+	region := vertexRegion(account)
+	if region == "" {
+		return s.sendErrorAndEnd(c, "gcp_region not configured")
+	}
+
+	resolvedModelID, ok := ResolveVertexModelID(account, testModelID)
+	if !ok {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Unsupported Vertex model: %s", testModelID))
+	}
+
+	// Set SSE headers (test UI expects SSE)
+	c.Writer.Header().Set("Content-Type", "text/event-stream")
+	c.Writer.Header().Set("Cache-Control", "no-cache")
+	c.Writer.Header().Set("Connection", "keep-alive")
+	c.Writer.Header().Set("X-Accel-Buffering", "no")
+	c.Writer.Flush()
+
+	vertexPayload := map[string]any{
+		"anthropic_version": vertexAnthropicVersion,
+		"messages": []map[string]any{
+			{
+				"role": "user",
+				"content": []map[string]any{
+					{
+						"type": "text",
+						"text": "hi",
+					},
+				},
+			},
+		},
+		"max_tokens":  256,
+		"temperature": 1,
+	}
+	vertexBody, _ := json.Marshal(vertexPayload)
+
+	apiURL := BuildVertexURL(projectID, region, resolvedModelID, false)
+
+	s.sendEvent(c, TestEvent{Type: "test_start", Model: resolvedModelID})
+
+	accessToken, err := s.getVertexTokenProvider().GetAccessToken(ctx, account)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to obtain Vertex access token: %s", err.Error()))
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(vertexBody))
+	if err != nil {
+		return s.sendErrorAndEnd(c, "Failed to create request")
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	attachVertexAuth(req, accessToken)
+
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+
+	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, nil)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusOK {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
+	}
+
+	// Vertex non-streaming response is standard Anthropic Messages JSON
 	var result struct {
 		Content []struct {
 			Text string `json:"text"`
