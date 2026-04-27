@@ -36,7 +36,7 @@ Sub2API is an AI API gateway platform designed to distribute and manage API quot
 
 ## Features
 
-- **Multi-Account Management** - Support multiple upstream account types (OAuth, API Key)
+- **Multi-Account Management** - Support multiple upstream account types: OAuth, API Key, AWS Bedrock, and **Google Vertex AI** ([Vertex Setup Guide](docs/VERTEX.md))
 - **API Key Distribution** - Generate and manage API Keys for users
 - **Precise Billing** - Token-level usage tracking and cost calculation
 - **Smart Scheduling** - Intelligent account selection with sticky sessions
