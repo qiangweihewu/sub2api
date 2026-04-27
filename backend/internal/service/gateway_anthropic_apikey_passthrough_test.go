@@ -762,29 +762,16 @@ func TestGatewayService_AnthropicOAuth_ForwardPreservesBillingHeaderSystemBlock(
 			system := gjson.GetBytes(upstream.lastBody, "system")
 			require.True(t, system.Exists())
 			require.True(t, system.IsArray(), "system should be an array")
-			systemArr := system.Array()
+			// 上游 5862e2d8 引入 billing attribution block：system 数组现在有 2 个元素
+			// （billing block + cc prompt block）。billing 文本从 messages 迁回 system[0]。
+			arr := system.Array()
+			require.Len(t, arr, 2, "system array should have billing block + cc prompt block")
 
-			// v0.1.125: system contains only the Claude Code identity block —
-			// client fingerprint text is moved to messages[] to avoid Anthropic's
-			// semantic third-party detection.
-			require.Len(t, systemArr, 1, "system must have exactly one CC block")
+			require.Contains(t, arr[0].Get("text").String(), "x-anthropic-billing-header:")
+			require.Contains(t, arr[0].Get("text").String(), "cc_version=")
 
-			require.Equal(t, claudeCodeSystemPrompt, systemArr[0].Get("text").String())
-			require.Equal(t, "ephemeral", systemArr[0].Get("cache_control.type").String())
-
-			// Client's "x-anthropic-billing-header keep" text now lives in
-			// messages (as a fake user instruction), not in system.
-			messages := gjson.GetBytes(upstream.lastBody, "messages")
-			require.True(t, messages.IsArray())
-			msgArr := messages.Array()
-			require.GreaterOrEqual(t, len(msgArr), 2, "expected injected instr+ack pair + original")
-			require.Equal(t, "user", msgArr[0].Get("role").String())
-			// v0.1.128: body scrub strips the literal "[System Instructions]" marker
-			// (Anthropic's third-party detector latches onto it), so we no longer assert
-			// its presence. The original client system text still has to make it through.
-			require.Contains(t, msgArr[0].Get("content.0.text").String(), "x-anthropic-billing-header keep")
-			require.Equal(t, "assistant", msgArr[1].Get("role").String())
-			require.Equal(t, "Understood. I will follow these instructions.", msgArr[1].Get("content.0.text").String())
+			require.Equal(t, claudeCodeSystemPrompt, arr[1].Get("text").String())
+			require.Equal(t, "ephemeral", arr[1].Get("cache_control.type").String())
 		})
 	}
 }

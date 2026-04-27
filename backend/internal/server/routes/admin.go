@@ -94,6 +94,9 @@ func RegisterAdminRoutes(
 
 		// 账号/分组仪表盘统计（Overview / IP / User / Account breakdowns）
 		registerDashboardStatsRoutes(admin, h)
+
+		// 邀请返利（专属用户管理）
+		registerAffiliateRoutes(admin, h)
 	}
 }
 
@@ -615,4 +618,19 @@ func registerDashboardStatsRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 	admin.GET("/groups/:id/stats/ips", stats.GroupIPBreakdown)
 	admin.GET("/groups/:id/stats/users", stats.GroupUserBreakdown)
 	admin.GET("/groups/:id/stats/accounts", stats.GroupAccountBreakdown)
+}
+
+// registerAffiliateRoutes 注册邀请返利的管理端路由（专属用户配置）
+func registerAffiliateRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
+	affiliates := admin.Group("/affiliates")
+	{
+		users := affiliates.Group("/users")
+		{
+			users.GET("", h.Admin.Affiliate.ListUsers)
+			users.GET("/lookup", h.Admin.Affiliate.LookupUsers)
+			users.POST("/batch-rate", h.Admin.Affiliate.BatchSetRate)
+			users.PUT("/:user_id", h.Admin.Affiliate.UpdateUserSettings)
+			users.DELETE("/:user_id", h.Admin.Affiliate.ClearUserSettings)
+		}
+	}
 }

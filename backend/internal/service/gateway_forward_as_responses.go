@@ -92,47 +92,19 @@ func (s *GatewayService) ForwardAsResponses(
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
 	}
 
-	// 6. Apply Claude Code mimicry for OAuth accounts (non-Claude-Code endpoints)
-	isClaudeCode := false // Responses API is never Claude Code
+	// 6. Apply Claude Code mimicry for OAuth accounts (non-Claude-Code endpoints).
+	// OpenAI Responses 协议进来的请求永远不是 Claude Code 客户端，所以对 OAuth 账号
+	// 必须完整执行 /v1/messages 主路径上的伪装链路（system 重写 + normalize + metadata 注入），
+	// 否则会被 Anthropic 判为第三方应用并扣 extra usage。
+	// 见 applyClaudeCodeOAuthMimicryToBody 的 godoc。
+	isClaudeCode := false
 	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
 
 	if shouldMimicClaudeCode {
-		preAudit := auditClaudeCodeShape(anthropicBody)
-
-		systemRewritten := false
-		if !strings.Contains(strings.ToLower(mappedModel), "haiku") &&
-			!systemIncludesClaudeCodePrompt(anthropicReq.System) {
-			anthropicBody = rewriteSystemForNonClaudeCode(anthropicBody, anthropicReq.System)
-			systemRewritten = true
-			// Feature-flagged 3-block system injection (see
-			// gateway_cc_system_injector.go). Default off.
-			anthropicBody = s.maybeInjectClaudeCodeSystemBlocks(anthropicBody)
-		}
-
-		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: !systemRewritten}
-		if s.identityService != nil {
-			fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header)
-			if err == nil && fp != nil {
-				_, mimicMPT, _ := s.settingService.GetGatewayForwardingSettings(ctx)
-				if !mimicMPT {
-					if metadataUserID := s.buildOAuthMetadataUserID(parsed, account, fp); metadataUserID != "" {
-						normalizeOpts.injectMetadata = true
-						normalizeOpts.metadataUserID = metadataUserID
-					}
-				}
-			}
-		}
-
-		// Claude Code OAuth 请求体规范化：剥离不支持的 temperature / tool_choice，
-		// 确保 tools 字段存在，模型 ID 规范化（与原生路径行为一致），注入 metadata.user_id
-		anthropicBody, mappedModel = normalizeClaudeOAuthRequestBody(
-			anthropicBody, mappedModel,
-			normalizeOpts,
-		)
-
-		// Audit shape after normalize; surfaces gaps in strip logic as WARN.
-		postAudit := auditClaudeCodeShape(anthropicBody)
-		logClaudeCodeShapeAudit("forward_as_responses", account.ID, mappedModel, preAudit, postAudit)
+		anthropicBody = s.applyClaudeCodeOAuthMimicryToBody(ctx, c, account, anthropicBody, anthropicReq.System, mappedModel)
+		// Fork-specific: feature-flagged 3-block system injector. Runs AFTER the
+		// shared mimicry pipeline so it sees the rewritten Claude Code identity system block.
+		anthropicBody = s.maybeInjectClaudeCodeSystemBlocks(anthropicBody)
 	}
 
 	// 7. Enforce cache_control block limit
@@ -402,7 +374,12 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	if s.responseHeaderFilter != nil {
 		responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
 	}
-	c.JSON(http.StatusOK, responsesResp)
+	if respBytes, err := json.Marshal(responsesResp); err == nil {
+		respBytes = reverseToolNamesIfPresent(c, respBytes)
+		c.Data(http.StatusOK, "application/json; charset=utf-8", respBytes)
+	} else {
+		c.JSON(http.StatusOK, responsesResp)
+	}
 
 	return &ForwardResult{
 		RequestID:       requestID,
@@ -502,7 +479,8 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 				continue
 			}
 			ensureHeaderSent()
-			if _, err := fmt.Fprint(c.Writer, sse); err != nil {
+			out := string(reverseToolNamesIfPresent(c, []byte(sse)))
+			if _, err := fmt.Fprint(c.Writer, out); err != nil {
 				logger.L().Info("forward_as_responses stream: client disconnected",
 					zap.String("request_id", requestID),
 				)
@@ -523,7 +501,8 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 					continue
 				}
 				ensureHeaderSent()
-				fmt.Fprint(c.Writer, sse) //nolint:errcheck
+				out := string(reverseToolNamesIfPresent(c, []byte(sse)))
+				fmt.Fprint(c.Writer, out) //nolint:errcheck
 			}
 			c.Writer.Flush()
 		}

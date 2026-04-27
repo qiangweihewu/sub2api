@@ -186,6 +186,9 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		DefaultConcurrency:                     settings.DefaultConcurrency,
 		DefaultBalance:                         settings.DefaultBalance,
 		AffiliateRebateRate:                    settings.AffiliateRebateRate,
+		AffiliateRebateFreezeHours:             settings.AffiliateRebateFreezeHours,
+		AffiliateRebateDurationDays:            settings.AffiliateRebateDurationDays,
+		AffiliateRebatePerInviteeCap:           settings.AffiliateRebatePerInviteeCap,
 		DefaultUserRPMLimit:                    settings.DefaultUserRPMLimit,
 		DefaultSubscriptions:                   defaultSubscriptions,
 		EnableModelFallback:                    settings.EnableModelFallback,
@@ -243,6 +246,8 @@ func (h *SettingHandler) GetSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: settings.ChannelMonitorDefaultIntervalSeconds,
 
 		AvailableChannelsEnabled: settings.AvailableChannelsEnabled,
+
+		AffiliateEnabled: settings.AffiliateEnabled,
 	}
 	response.Success(c, systemSettingsResponseData(payload, authSourceDefaults))
 }
@@ -341,6 +346,9 @@ type UpdateSettingsRequest struct {
 	DefaultConcurrency                       int                               `json:"default_concurrency"`
 	DefaultBalance                           float64                           `json:"default_balance"`
 	AffiliateRebateRate                      *float64                          `json:"affiliate_rebate_rate"`
+	AffiliateRebateFreezeHours               *int                              `json:"affiliate_rebate_freeze_hours"`
+	AffiliateRebateDurationDays              *int                              `json:"affiliate_rebate_duration_days"`
+	AffiliateRebatePerInviteeCap             *float64                          `json:"affiliate_rebate_per_invitee_cap"`
 	DefaultUserRPMLimit                      int                               `json:"default_user_rpm_limit"`
 	DefaultSubscriptions                     []dto.DefaultSubscriptionSetting  `json:"default_subscriptions"`
 	AuthSourceDefaultEmailBalance            *float64                          `json:"auth_source_default_email_balance"`
@@ -443,6 +451,9 @@ type UpdateSettingsRequest struct {
 
 	// Available Channels feature switch (user-facing)
 	AvailableChannelsEnabled *bool `json:"available_channels_enabled"`
+
+	// Affiliate (邀请返利) feature switch
+	AffiliateEnabled *bool `json:"affiliate_enabled"`
 }
 
 // UpdateSettings 更新系统设置
@@ -481,6 +492,33 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 	}
 	if affiliateRebateRate > service.AffiliateRebateRateMax {
 		affiliateRebateRate = service.AffiliateRebateRateMax
+	}
+	affiliateRebateFreezeHours := previousSettings.AffiliateRebateFreezeHours
+	if req.AffiliateRebateFreezeHours != nil {
+		affiliateRebateFreezeHours = *req.AffiliateRebateFreezeHours
+	}
+	if affiliateRebateFreezeHours < 0 {
+		affiliateRebateFreezeHours = service.AffiliateRebateFreezeHoursDefault
+	}
+	if affiliateRebateFreezeHours > service.AffiliateRebateFreezeHoursMax {
+		affiliateRebateFreezeHours = service.AffiliateRebateFreezeHoursMax
+	}
+	affiliateRebateDurationDays := previousSettings.AffiliateRebateDurationDays
+	if req.AffiliateRebateDurationDays != nil {
+		affiliateRebateDurationDays = *req.AffiliateRebateDurationDays
+	}
+	if affiliateRebateDurationDays < 0 {
+		affiliateRebateDurationDays = service.AffiliateRebateDurationDaysDefault
+	}
+	if affiliateRebateDurationDays > service.AffiliateRebateDurationDaysMax {
+		affiliateRebateDurationDays = service.AffiliateRebateDurationDaysMax
+	}
+	affiliateRebatePerInviteeCap := previousSettings.AffiliateRebatePerInviteeCap
+	if req.AffiliateRebatePerInviteeCap != nil {
+		affiliateRebatePerInviteeCap = *req.AffiliateRebatePerInviteeCap
+	}
+	if affiliateRebatePerInviteeCap < 0 {
+		affiliateRebatePerInviteeCap = service.AffiliateRebatePerInviteeCapDefault
 	}
 	// 通用表格配置：兼容旧客户端未传字段时保留当前值。
 	if req.TableDefaultPageSize <= 0 {
@@ -1134,6 +1172,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		DefaultConcurrency:               req.DefaultConcurrency,
 		DefaultBalance:                   req.DefaultBalance,
 		AffiliateRebateRate:              affiliateRebateRate,
+		AffiliateRebateFreezeHours:       affiliateRebateFreezeHours,
+		AffiliateRebateDurationDays:      affiliateRebateDurationDays,
+		AffiliateRebatePerInviteeCap:     affiliateRebatePerInviteeCap,
 		DefaultUserRPMLimit:              req.DefaultUserRPMLimit,
 		DefaultSubscriptions:             defaultSubscriptions,
 		EnableModelFallback:              req.EnableModelFallback,
@@ -1272,6 +1313,12 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 				return *req.AvailableChannelsEnabled
 			}
 			return previousSettings.AvailableChannelsEnabled
+		}(),
+		AffiliateEnabled: func() bool {
+			if req.AffiliateEnabled != nil {
+				return *req.AffiliateEnabled
+			}
+			return previousSettings.AffiliateEnabled
 		}(),
 	}
 
@@ -1455,6 +1502,9 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		DefaultConcurrency:                     updatedSettings.DefaultConcurrency,
 		DefaultBalance:                         updatedSettings.DefaultBalance,
 		AffiliateRebateRate:                    updatedSettings.AffiliateRebateRate,
+		AffiliateRebateFreezeHours:             updatedSettings.AffiliateRebateFreezeHours,
+		AffiliateRebateDurationDays:            updatedSettings.AffiliateRebateDurationDays,
+		AffiliateRebatePerInviteeCap:           updatedSettings.AffiliateRebatePerInviteeCap,
 		DefaultUserRPMLimit:                    updatedSettings.DefaultUserRPMLimit,
 		DefaultSubscriptions:                   updatedDefaultSubscriptions,
 		EnableModelFallback:                    updatedSettings.EnableModelFallback,
@@ -1511,6 +1561,8 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 		ChannelMonitorDefaultIntervalSeconds: updatedSettings.ChannelMonitorDefaultIntervalSeconds,
 
 		AvailableChannelsEnabled: updatedSettings.AvailableChannelsEnabled,
+
+		AffiliateEnabled: updatedSettings.AffiliateEnabled,
 	}
 	response.Success(c, systemSettingsResponseData(payload, updatedAuthSourceDefaults))
 }
@@ -1764,6 +1816,15 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	if before.AffiliateRebateRate != after.AffiliateRebateRate {
 		changed = append(changed, "affiliate_rebate_rate")
 	}
+	if before.AffiliateRebateFreezeHours != after.AffiliateRebateFreezeHours {
+		changed = append(changed, "affiliate_rebate_freeze_hours")
+	}
+	if before.AffiliateRebateDurationDays != after.AffiliateRebateDurationDays {
+		changed = append(changed, "affiliate_rebate_duration_days")
+	}
+	if before.AffiliateRebatePerInviteeCap != after.AffiliateRebatePerInviteeCap {
+		changed = append(changed, "affiliate_rebate_per_invitee_cap")
+	}
 	if !equalDefaultSubscriptions(before.DefaultSubscriptions, after.DefaultSubscriptions) {
 		changed = append(changed, "default_subscriptions")
 	}
@@ -1881,6 +1942,9 @@ func diffSettings(before *service.SystemSettings, after *service.SystemSettings,
 	}
 	if before.AvailableChannelsEnabled != after.AvailableChannelsEnabled {
 		changed = append(changed, "available_channels_enabled")
+	}
+	if before.AffiliateEnabled != after.AffiliateEnabled {
+		changed = append(changed, "affiliate_enabled")
 	}
 	changed = appendAuthSourceDefaultChanges(changed, beforeAuthSourceDefaults, afterAuthSourceDefaults)
 	return changed
