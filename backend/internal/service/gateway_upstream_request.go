@@ -19,6 +19,7 @@ import (
 )
 
 func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, tokenType, modelID string, reqStream bool, mimicClaudeCode bool) (*http.Request, []byte, error) {
+	body = stripDeferredToolCacheControl(body)
 	if account.Platform == PlatformAnthropic && (account.Type == AccountTypeServiceAccount || account.Type == AccountTypeVertex) {
 		req, err := s.buildUpstreamRequestAnthropicVertex(ctx, c, account, body, token, modelID, reqStream)
 		return req, body, err
@@ -114,9 +115,11 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// 稳定化 tools 数组排序，防止 MCP 工具异步注册导致的顺序抖动破坏 prompt cache prefix
 	body = stabilizeToolOrder(body)
 
-	// 同步 billing header cc_version 与实际发送的 User-Agent 版本
-	if fingerprint != nil {
-		body = syncBillingHeaderVersion(body, fingerprint.UserAgent)
+	// 同步 billing header cc_version 与实际发送的 User-Agent 版本。
+	// upstream 994ca26e9：OAuth mimic 路径会在应用完账号指纹后强制改回内置 UA，
+	// 所以计费指纹必须取"最终真正发出去的那个 UA"，而不是 fingerprint.UserAgent。
+	if billingUA := effectiveBillingUserAgent(tokenType, mimicClaudeCode, fingerprint); billingUA != "" {
+		body = syncBillingHeaderVersion(body, billingUA)
 	}
 
 	// === 计算最终 anthropic-beta header（先于 body sanitize 与 CCH 签名）===

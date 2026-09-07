@@ -396,6 +396,7 @@ func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
 	systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
 	systemRewritten := false
 	if systemPromptInjectionEnabled {
+		systemPromptBlocks = claudeOAuthSystemPromptBlocksForModel(model, systemPromptBlocks)
 		body = rewriteSystemForNonClaudeCodeWithPromptBlocks(body, normalizeSystemParam(systemRaw), systemPrompt, systemPromptBlocks)
 		systemRewritten = true
 	}
@@ -706,6 +707,24 @@ type claudeOAuthSystemPromptBlocksEnvelope struct {
 	Blocks []claudeOAuthSystemPromptBlockConfig `json:"blocks"`
 }
 
+// claudeFableOAuthSystemPromptBlocks keeps the Claude Code identity required by
+// OAuth credentials without the generic CLI expansion block. Fable 5 rejects
+// that expansion upstream with stop_reason=refusal and zero output tokens,
+// while the native billing + identity shape is accepted. Original client
+// system instructions are still migrated into the message history by
+// rewriteSystemForNonClaudeCodeWithPromptBlocks.
+const claudeFableOAuthSystemPromptBlocks = `[
+	{"type":"text","text":"{billing_header}"},
+	{"type":"text","text":"{claude_code_system_prompt}"}
+]`
+
+func claudeOAuthSystemPromptBlocksForModel(model, configured string) string {
+	if isAnthropicFableModel(model) {
+		return claudeFableOAuthSystemPromptBlocks
+	}
+	return configured
+}
+
 func defaultClaudeOAuthExpansionPrompt(expansionPrompt string) string {
 	expansionPrompt = strings.TrimSpace(expansionPrompt)
 	if expansionPrompt == "" {
@@ -759,8 +778,10 @@ func expandClaudeOAuthSystemPromptTextTemplate(body []byte, text string, expansi
 		return "", nil
 	}
 	expansionPrompt = defaultClaudeOAuthExpansionPrompt(expansionPrompt)
-	// fork: 用运行时动态版本（GetCLICurrentVersion），而非上游硬编码常量。最终 cc_version
-	// 仍会在 syncBillingHeaderVersion / signBillingHeaderCCH 阶段按账号 UA + SHA256 指纹重写。
+	// fork: 用运行时解析器 GetCLICurrentVersion()（DB 设置 > SUB2API_CLAUDE_CLI_VERSION
+	// 环境覆盖 > 内置常量），而非上游的 claude.CLIVersion()（看不到 DB 设置）。
+	// 最终 cc_version 仍会在 syncBillingHeaderVersion / signBillingHeaderCCH 阶段
+	// 按账号 UA + SHA256 指纹重写。
 	cliVersion := claude.GetCLICurrentVersion()
 	billingText, err := buildBillingAttributionText(body, cliVersion)
 	if err != nil {

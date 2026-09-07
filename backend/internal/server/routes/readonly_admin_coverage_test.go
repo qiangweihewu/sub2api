@@ -50,12 +50,14 @@ var reviewedDenyPrefixes = []string{
 
 	// ---- 其余整体拒绝的模块 ----
 	"/api/v1/admin/api-keys",                 // 客户 API Key 管理
+	"/api/v1/admin/cn-providers",             // CN 供应商余额/配额探测：会对上游发真实请求
 	"/api/v1/admin/compliance",               // 合规确认（含 accept 写操作）
 	"/api/v1/admin/error-passthrough-rules",  // 网关错误透传规则（配置面）
 	"/api/v1/admin/prompt-audit",             // 提示词审计：客户请求原文
 	"/api/v1/admin/risk-control",             // 风控：封禁/解封/命中日志
 	"/api/v1/admin/scheduled-test-plans",     // 定时探测计划（会真发上游请求）
 	"/api/v1/admin/system",                   // 版本/更新/回滚/重启
+	"/api/v1/admin/plugins",                  // 插件管理：上传/启停/配置/UI 会话，等价于代码执行面
 	"/api/v1/admin/tls-fingerprint-profiles", // TLS 指纹配置
 	"/api/v1/admin/user-attributes",          // 用户属性定义（配置面）
 }
@@ -138,7 +140,11 @@ var reviewedDenyExact = map[string]struct{}{
 	"POST /api/v1/admin/accounts/sync/crs/preview":                   {},
 	"POST /api/v1/admin/accounts/upstream-billing-probe/batch":       {},
 	"GET /api/v1/admin/accounts/upstream-billing-probe/settings":     {},
-	"PUT /api/v1/admin/accounts/upstream-billing-probe/settings":     {},
+	// 上游计费倍率总览：按账号列出上游成本口径（含账号名/平台/分组）。
+	// 与同模块的 upstream-billing-probe 一致按拒绝登记——放行侧宽松会泄露数据，
+	// 拒绝侧只是保持 403。如需给只读管理员开放，改登记到 middleware 白名单即可。
+	"GET /api/v1/admin/accounts/upstream-billing-rates":          {},
+	"PUT /api/v1/admin/accounts/upstream-billing-probe/settings": {},
 
 	// ---- groups（15 条）----
 	// 分组：写操作 + 客户 API Key、订阅等客户数据

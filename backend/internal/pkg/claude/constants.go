@@ -69,6 +69,17 @@ const (
 	BetaEffort             = "effort-2025-11-24"
 	BetaRedactThinking     = "redact-thinking-2026-02-12"
 	BetaExtendedCacheTTL   = "extended-cache-ttl-2025-04-11"
+
+	// server-side refusal fallback beta 字段族（beta Messages API 专有）。
+	// 客户端（Claude Code / SDK / OpenCode 等）会默认透传 body.fallbacks /
+	// body.fallback_credit_token，上游仅在 anthropic-beta 携带对应 token 时接受；
+	// 缺 token 时 Pydantic 拒收："fallbacks: Extra inputs are not permitted"。
+	// 仅用于 sanitize 的条件判断（strip-or-keep），禁止加入
+	// FullClaudeCodeMimicryBetas / DefaultBetaHeader / APIKeyBetaHeader /
+	// Bedrock 白名单：server-side fallback 会换模型、改计费，不能默认打开。
+	BetaServerSideFallback   = "server-side-fallback-2026-07-01"
+	BetaFallbackCredit       = "fallback-credit-2026-07-01"
+	BetaFallbackCreditLegacy = "fallback-credit-2026-06-01"
 )
 
 // DroppedBetas 是转发时需要从 anthropic-beta header 中移除的 beta token 列表。
@@ -125,28 +136,30 @@ const APIKeyHaikuBetaHeader = BetaInterleavedThinking
 // 客户端缺省时统一使用 5m"，这样既不浪费 1h 缓存额度，也保留客户端自定义能力。
 const DefaultCacheControlTTL = "5m"
 
-// CLIDefaultVersion 是源码层硬编码的"出厂默认"Claude Code CLI 版本号，
-// 在 init() 中用于校验源码层 DefaultHeaders["User-Agent"] 与之一致（fail-fast）。
+// CLICurrentVersion 是源码层硬编码的"出厂默认"（内置基线）Claude Code CLI 版本号。
+// 用于 billing attribution block 中的 cc_version=X.Y.Z.{fp} 前缀以及 fingerprint 计算的
+// 下限校验。必须与 DefaultHeaders["User-Agent"] 中的版本号严格一致；不一致会被 Anthropic
+// 判为第三方调用（"Third-party apps now draw from your extra usage"）。
 //
-// 真正运行时使用的版本号请走 GetCLICurrentVersion() / SetCLICurrentVersion() —
-// CLIVersionTrackerService 启动时会从 system_settings.cli_current_version 回填，
-// 每隔可配置周期从 npm 拉取最新版本并更新。
+// ⚠️ 不要直接引用本常量来"读当前生效版本"。生效版本有三级优先级（高 → 低）：
+//  1. DB 设置 system_settings.cli_current_version（由 CLIVersionTrackerService 回填 /
+//     周期性从 npm 更新），经 SetCLICurrentVersion 写入进程内变量；
+//  2. 环境变量 SUB2API_CLAUDE_CLI_VERSION（见 cli_version.go 的 CLIVersion()）；
+//  3. 本常量。
 //
-// **源码不变量**：CLIDefaultVersion 必须与 DefaultHeaders["User-Agent"] 中的版本号严格
-// 一致；不一致 init() 直接 panic。升级流程：在同一个 PR 里修改下面两处常量，并跑一次
-// `go test ./internal/pkg/claude/...`。
-const CLIDefaultVersion = "2.1.220"
+// 读取生效版本请统一使用 GetCLICurrentVersion()。
+const CLICurrentVersion = "2.1.220"
 
-// CLICurrentVersion Deprecated：保留以兼容老调用方；返回当前运行时版本。
-// 新代码请使用 GetCLICurrentVersion()。
+// CLIDefaultVersion 是"没有 DB 设置时"本进程使用的默认 CLI 版本号：
+// 内置基线 CLICurrentVersion 叠加 SUB2API_CLAUDE_CLI_VERSION 环境覆盖后的结果。
 //
-// Deprecated: use GetCLICurrentVersion() instead.
-func CLICurrentVersion() string { //nolint:revive // legacy name kept for compatibility
-	return GetCLICurrentVersion()
-}
+// 在包初始化时解析一次并在进程生命周期内恒定：伪装身份必须自洽——User-Agent 头与请求体
+// billing attribution 块里的 cc_version 由不同代码路径写入，两次读到不同的值会让同一个
+// 请求自相矛盾，被上游判为非正版客户端。
+var CLIDefaultVersion = CLIVersion()
 
 var (
-	// cliCurrentVersion 是运行时版本号，受 cliVersionMu 保护。
+	// cliCurrentVersion 是运行时版本号（DB 设置来源），受 cliVersionMu 保护。
 	cliCurrentVersion string
 	cliVersionMu      sync.RWMutex
 
@@ -154,7 +167,10 @@ var (
 	uaVersionRewriteRe = regexp.MustCompile(`claude-cli/\d+\.\d+\.\d+`)
 )
 
-// GetCLICurrentVersion 返回当前运行时的 CLI 版本号（线程安全）。
+// GetCLICurrentVersion 返回当前生效的 CLI 版本号（线程安全）。
+//
+// 这是唯一的解析入口：DB 设置 > 环境覆盖 > 内置常量。热路径上不读 DB——
+// DB 值由 CLIVersionTrackerService 通过 SetCLICurrentVersion 推入进程内变量。
 func GetCLICurrentVersion() string {
 	cliVersionMu.RLock()
 	defer cliVersionMu.RUnlock()
@@ -165,7 +181,7 @@ func GetCLICurrentVersion() string {
 }
 
 // SetCLICurrentVersion 更新运行时 CLI 版本号；同步刷新 DefaultHeaders["User-Agent"]。
-// 传入空字符串视为重置为 CLIDefaultVersion。
+// 传入空字符串视为重置为 CLIDefaultVersion（即环境覆盖 / 内置常量）。
 //
 // 仅在严格 semver `X.Y.Z` 格式时接受，否则返回 false 并保持原值（防止 npm 偶发返回
 // pre-release / 错误格式时污染 UA）。
@@ -233,16 +249,20 @@ func FullClaudeCodeMimicryBetas() []string {
 //     SDK emits this header on every request. Omitting it is a third-party
 //     tell. (Wire casing is all-lowercase; see service.resolveWireCasing.)
 var DefaultHeaders = map[string]string{
-	"User-Agent":                  "claude-cli/2.1.220 (external, cli)",
-	"X-Stainless-Lang":            "js",
-	"X-Stainless-Package-Version": "0.94.0",
-	"X-Stainless-OS":              "Linux",
-	"X-Stainless-Arch":            "arm64",
-	"X-Stainless-Runtime":         "node",
-	"X-Stainless-Runtime-Version": "v24.3.0",
-	"X-Stainless-Retry-Count":     "0",
-	"X-Stainless-Timeout":         "600",
-	"X-App":                       "cli",
+	// Keep these in sync with recent Claude CLI traffic to reduce the chance
+	// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
+	// 版本参考：对齐 Parrot (src/transform/cc_mimicry.py:49) 的 CLI_USER_AGENT。
+	// 版本号在运行时由 SetCLICurrentVersion（DB 设置）就地改写，见 uaVersionRewriteRe。
+	"User-Agent":                                "claude-cli/" + CLIVersion() + " (external, cli)",
+	"X-Stainless-Lang":                          "js",
+	"X-Stainless-Package-Version":               "0.94.0",
+	"X-Stainless-OS":                            "Linux",
+	"X-Stainless-Arch":                          "arm64",
+	"X-Stainless-Runtime":                       "node",
+	"X-Stainless-Runtime-Version":               "v24.3.0",
+	"X-Stainless-Retry-Count":                   "0",
+	"X-Stainless-Timeout":                       "600",
+	"X-App":                                     "cli",
 	"Anthropic-Dangerous-Direct-Browser-Access": "true",
 }
 
@@ -256,6 +276,12 @@ type Model struct {
 
 // DefaultModels Claude Code 客户端支持的默认模型列表
 var DefaultModels = []Model{
+	{
+		ID:          "claude-fable-5-1",
+		Type:        "model",
+		DisplayName: "Claude Fable 5.1",
+		CreatedAt:   "2026-09-01T00:00:00Z",
+	},
 	{
 		ID:          "claude-fable-5",
 		Type:        "model",

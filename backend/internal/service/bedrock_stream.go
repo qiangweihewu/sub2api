@@ -151,7 +151,7 @@ func (s *GatewayService) handleBedrockStreamingResponse(
 
 			// 解析 SSE 事件数据提取 usage（在 override 应用之后，以便 usage 累加器与
 			// 客户端可见值保持一致）
-			s.parseSSEUsagePassthrough(string(sseData), usage)
+			parseSSEUsagePassthrough(string(sseData), usage)
 
 			// 写入标准 SSE 格式
 			if !clientDisconnected {
