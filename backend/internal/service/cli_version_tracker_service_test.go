@@ -87,16 +87,16 @@ func TestReloadFromDB_AppliesVersion(t *testing.T) {
 	})
 
 	repo := newFakeSettingRepo(map[string]string{
-		SettingKeyCLICurrentVersion: "2.1.200",
-		SettingKeyCLIRecentVersions: `["2.1.200","2.1.199"]`,
+		SettingKeyCLICurrentVersion: "2.1.300",
+		SettingKeyCLIRecentVersions: `["2.1.300","2.1.299"]`,
 	})
 	svc := NewCLIVersionTrackerService(repo, config.CLIVersionTrackerConfig{
 		Enabled:           false, // 不启动 ticker，仅测试 reload
 		MaxRecentVersions: 3,
 	})
 	require.NoError(t, svc.ReloadFromDB(context.Background()))
-	require.Equal(t, "2.1.200", claude.GetCLICurrentVersion())
-	require.Equal(t, []string{"2.1.200", "2.1.199"}, GetCachedRecentVersions())
+	require.Equal(t, "2.1.300", claude.GetCLICurrentVersion())
+	require.Equal(t, []string{"2.1.300", "2.1.299"}, GetCachedRecentVersions())
 }
 
 func TestReloadFromDB_InvalidVersionIgnored(t *testing.T) {

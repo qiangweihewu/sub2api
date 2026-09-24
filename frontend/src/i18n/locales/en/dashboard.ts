@@ -29,7 +29,7 @@ export default {
       monthly: 'Monthly (30-day rolling)',
       resetsAt: 'Resets {time}',
       noLimit: 'unlimited',
-      disabled: 'Disabled'
+      disabled: 'Disabled',
     },
     tokenUsageTrend: 'Token Usage Trend',
     noDataAvailable: 'No data available',
@@ -58,9 +58,13 @@ export default {
     redeemCode: 'Redeem Code',
     addBalanceWithCode: 'Add balance with a code'
   },
+
+  // Groups (shared)
   groups: {
     subscription: 'Sub'
   },
+
+  // API Keys
   keys: {
     title: 'API Keys',
     description: 'Manage your API keys and access tokens',
@@ -71,7 +75,7 @@ export default {
       copied: 'Copied',
       copiedHint: 'Copied to clipboard',
       clickToCopy: 'Click to copy this endpoint',
-      speedTest: 'Speed Test'
+      speedTest: 'Speed Test',
     },
     allGroups: 'All Groups',
     allStatus: 'All Status',
@@ -79,6 +83,21 @@ export default {
     columnAlwaysVisible: 'This column is always visible',
     createKey: 'Create API Key',
     editKey: 'Edit API Key',
+    bulkEdit: {
+      title: 'Bulk Edit',
+      selectedCount: '{count} keys selected',
+      selectKey: 'Select key {name}',
+      clearSelection: 'Clear selection',
+      hint: 'Check the fields to update. Unchecked fields keep their current values.',
+      limitHint: 'Enter 0 for no limit. Existing usage is preserved.',
+      ipHint: 'One IP or CIDR per line. Leave empty to clear this list on the selected keys.',
+      invalidLimit: 'Enter a valid amount greater than or equal to 0.',
+      invalidExpiration: 'Choose a valid expiration date or select Never expires.',
+      apply: 'Apply to {count} keys',
+      success: 'Updated {count} keys',
+      partialFailure: 'Updated {success} keys; {failed} failed',
+      failureHint: 'These keys could not be updated. Adjust the settings and retry. Only failed keys will be retried.'
+    },
     deleteKey: 'Delete API Key',
     deleteConfirmMessage: "Are you sure you want to delete '{name}'? This action cannot be undone.",
     id: 'ID',
@@ -97,6 +116,19 @@ export default {
     nameLabel: 'Name',
     namePlaceholder: 'My API Key',
     groupLabel: 'Group',
+    providerLabel: 'Provider',
+    providers: {
+      anthropic: 'Anthropic',
+      openai: 'OpenAI',
+      domestic: 'Chinese AI',
+      other: 'Other'
+    },
+    providerHints: {
+      anthropic: 'Choose an available Anthropic / Claude group',
+      openai: 'Choose an available OpenAI / GPT group',
+      domestic: 'Includes DeepSeek, Kimi, Zhipu GLM and MiniMax',
+      other: 'Includes Gemini, Grok, Antigravity, OpenCode and mixed groups'
+    },
     selectGroup: 'Select a group',
     statusLabel: 'Status',
     selectStatus: 'Select status',
@@ -125,7 +157,8 @@ export default {
     useKey: 'Use Key',
     useKeyModal: {
       title: 'Use API Key',
-      description: 'Add the following environment variables to your terminal profile or run directly in terminal to configure API access.',
+      description:
+        'Add the following environment variables to your terminal profile or run directly in terminal to configure API access.',
       copy: 'Copy',
       copied: 'Copied',
       note: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
@@ -141,7 +174,7 @@ export default {
         authModeApiKeyRestartNotice: 'After saving this configuration, completely quit and restart Codex Desktop or CLI, then create a new task so the client can rebuild its tool registry.',
         configTomlHint: 'Make sure the following content is at the beginning of the config.toml file',
         note: 'Make sure the config directory exists. macOS/Linux users can run mkdir -p ~/.codex to create it.',
-        noteWindows: 'Press Win+R and enter %userprofile%\\.codex to open the config directory. Create it manually if it does not exist.'
+        noteWindows: 'Press Win+R and enter %userprofile%\\.codex to open the config directory. Create it manually if it does not exist.',
       },
       cliTabs: {
         claudeCode: 'Claude Code',
@@ -149,19 +182,19 @@ export default {
         codexCli: 'Codex CLI',
         codexCliWs: 'Codex CLI (WebSocket)',
         grokCli: 'Grok CLI',
-        opencode: 'OpenCode'
+        opencode: 'OpenCode',
       },
       antigravity: {
         description: 'Configure API access for Antigravity group. Select the configuration method based on your client.',
         claudeCode: 'Claude Code',
         geminiCli: 'Gemini CLI',
         claudeNote: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
-        geminiNote: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.'
+        geminiNote: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
       },
       gemini: {
         description: 'Add the following environment variables to your terminal profile or run directly in terminal to configure Gemini CLI access.',
         modelComment: 'If you have Gemini 3 access, you can use: gemini-3-pro-preview',
-        note: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.'
+        note: 'These environment variables will be active in the current terminal session. For permanent configuration, add them to ~/.bashrc, ~/.zshrc, or the appropriate configuration file.',
       },
       grok: {
         description:
@@ -189,6 +222,12 @@ export default {
         codexConfigTomlHint: 'Download the model catalog below, save both files under the Codex config directory, and restart Codex.',
         codexNote: 'Export SUB2API_API_KEY before starting Codex. The downloaded catalog contains model metadata only, not your API key.',
       },
+      minimax: {
+        description: 'Configure Claude Code, Codex, or OpenCode through the current MiniMax group.',
+        codexDescription: 'Configure Codex with API key authentication through the current MiniMax group.',
+        codexConfigTomlHint: 'Download the model catalog below, save both files under the Codex config directory, and restart Codex.',
+        codexNote: 'Export SUB2API_API_KEY before starting Codex. The downloaded catalog contains model metadata only, not your API key.',
+      },
       composite: {
         description: 'Configure supported clients through the current Composite routing group.',
         codexDescription: 'Configure Codex with API key authentication and the complete model catalog for this Composite group.',
@@ -212,8 +251,8 @@ export default {
       opencode: {
         title: 'OpenCode Example',
         subtitle: 'opencode.json',
-        hint: 'Config path: ~/.config/opencode/opencode.json (or opencode.jsonc), create if not exists. Use default providers (openai/anthropic/google) or custom provider_id. API Key can be configured directly or via /connect command. This is an example, adjust models and options as needed.'
-      }
+        hint: 'Config path: ~/.config/opencode/opencode.json (or opencode.jsonc), create if not exists. Use default providers (openai/anthropic/google) or custom provider_id. API Key can be configured directly or via /connect command. This is an example, adjust models and options as needed.',
+      },
     },
     customKeyLabel: 'Custom Key',
     customKeyPlaceholder: 'Enter your custom key (min 16 chars)',
@@ -236,8 +275,9 @@ export default {
       claudeCode: 'Claude Code',
       claudeCodeDesc: 'Import as Claude Code configuration',
       geminiCli: 'Gemini CLI',
-      geminiCliDesc: 'Import as Gemini CLI configuration'
+      geminiCliDesc: 'Import as Gemini CLI configuration',
     },
+    // Quota and expiration
     quotaLimit: 'Quota Limit',
     quotaAmount: 'Quota Amount (USD)',
     quotaAmountPlaceholder: 'Enter quota limit in USD',
@@ -276,7 +316,7 @@ export default {
       active: 'Active',
       inactive: 'Inactive',
       quota_exhausted: 'Quota Exhausted',
-      expired: 'Expired'
+      expired: 'Expired',
     },
     cacheStrategy: {
       auto: 'Auto (recommended)',
@@ -289,6 +329,8 @@ export default {
       latencyPriorityDesc: 'Force 1-hour cache — better for long sessions or heavy prompt reuse (1h cache creation costs ~2× the 5m price)'
     }
   },
+
+  // Usage
   usage: {
     title: 'Usage Records',
     description: 'View and analyze your API usage history',
@@ -363,6 +405,7 @@ export default {
     allCompactionTypes: 'All Requests',
     compactionOnly: 'Compaction Only',
     cyber: 'Cyber',
+    live: 'Live',
     unknown: 'Unknown',
     in: 'In',
     out: 'Out',
@@ -427,49 +470,30 @@ export default {
       detailOrg: 'ISP',
       detailTimezone: 'Timezone',
       detailAccuracy: 'Accuracy',
-      detailCoordinates: 'Coordinates'
+      detailCoordinates: 'Coordinates',
     },
-    tabs: {
-      usage: 'Usage',
-      errors: 'Error Requests',
-      ranking: 'User Ranking'
-    },
+    tabs: { usage: 'Usage', errors: 'Error Requests', ranking: 'User Ranking' },
     errors: {
-      time: 'Time',
-      model: 'Model',
-      endpoint: 'Endpoint',
-      status: 'Status',
-      category: 'Category',
-      platform: 'Platform',
-      message: 'Message',
-      keyName: 'Key Name',
-      keyDeleted: 'Deleted',
-      allKeys: 'All keys',
-      modelPlaceholder: 'Search model',
-      allCategories: 'All categories',
-      allStatuses: 'All status codes',
-      empty: 'No error requests',
-      failedToLoad: 'Failed to load error requests',
+      time: 'Time', model: 'Model', endpoint: 'Endpoint', status: 'Status',
+      category: 'Category', platform: 'Platform', message: 'Message',
+      keyName: 'Key Name', keyDeleted: 'Deleted', allKeys: 'All keys',
+      modelPlaceholder: 'Search model', allCategories: 'All categories', allStatuses: 'All status codes',
+      empty: 'No error requests', failedToLoad: 'Failed to load error requests',
       categories: {
-        auth: 'Auth failed',
-        rate_limit: 'Rate limited',
-        quota: 'Balance/Subscription',
-        invalid_request: 'Invalid request',
-        service_unavailable: 'Service unavailable',
-        upstream: 'Upstream error',
-        internal: 'Platform error',
-        other: 'Other',
-        cyber: 'Cyber policy'
+        auth: 'Auth failed', rate_limit: 'Rate limited', quota: 'Balance/Subscription',
+        invalid_request: 'Invalid request', service_unavailable: 'Service unavailable',
+        upstream: 'Upstream error', internal: 'Platform error', other: 'Other', cyber: 'Cyber policy',
       },
       detail: {
         title: 'Error Request Detail',
         responseBody: 'Response Body',
         upstreamStatus: 'Upstream Status',
-        loadFailed: 'Failed to load detail, please try again'
-      }
+        loadFailed: 'Failed to load detail, please try again',
+      },
     },
-    live: 'Live'
   },
+
+  // Shared keys for channel monitor (admin + user views)
   monitorCommon: {
     status: {
       operational: 'Operational',
@@ -486,7 +510,9 @@ export default {
       antigravity: 'Antigravity',
       kimi: 'Kimi',
       zhipu: 'Zhipu GLM',
-      deepseek: 'DeepSeek'
+      deepseek: 'DeepSeek',
+      minimax: 'MiniMax',
+      opencode_go: 'OpenCode'
     },
     // Check modes (how a monitor performs its checks)
     checkMode: {
@@ -503,6 +529,7 @@ export default {
         '7dSonnet': '7d Sonnet',
         '7dFable': '7d Fable',
         weekly: 'Weekly',
+        monthly: 'Monthly',
         daily: 'Daily',
         '30d': '30d',
         total: 'Total'
@@ -534,6 +561,8 @@ export default {
     relativeHoursAgo: '{n}h ago',
     relativeDaysAgo: '{n}d ago'
   },
+
+  // Channel Status (user-facing read-only view)
   channelStatus: {
     title: 'Channel Status',
     description: 'Inspect channel availability, latency and recent status',
@@ -575,6 +604,8 @@ export default {
       description: 'No monitored channels have been configured yet.'
     }
   },
+
+  // Available Channels (user-facing)
   availableChannels: {
     title: 'Available Channels',
     description: 'Channels you can access, along with their supported models and pricing',
@@ -599,6 +630,8 @@ export default {
       billingModePerRequest: 'Per Request',
       billingModeImage: 'Per Image',
       billingModeVideo: 'Per Video',
+      videoPrice: 'Video Price',
+      unitPerSecond: '/ second',
       inputPrice: 'Input',
       outputPrice: 'Output',
       cacheWritePrice: 'Cache Write',
@@ -613,6 +646,70 @@ export default {
       unitPerRequest: '/ request'
     }
   },
+
+  // Model Plaza (public group/model pricing showcase)
+  modelPlaza: {
+    title: 'Model Plaza',
+    description: 'Browse available models and pricing by group',
+    loading: 'Loading...',
+    empty: 'No groups to display',
+    loadFailed: 'Failed to load model plaza',
+    noSearchResult: 'No matching models',
+    anonymousHint: 'Sign in to see your exclusive groups and personal rates',
+    filters: {
+      platformLabel: 'Platform',
+      groupLabel: 'Group',
+      rateLabel: 'Rate',
+      modelLabel: 'Model',
+      searchPlaceholder: 'Search models',
+      all: 'All'
+    },
+    badges: {
+      exclusive: 'Exclusive',
+      subscription: 'Subscription'
+    },
+    detail: {
+      noModels: 'No models configured for this group',
+      noPricing: 'Pricing not configured',
+      peakNote: 'Peak hours {window}: billing rate ×{multiplier}',
+      longContextDisabledNote: 'Long-context tier pricing is disabled for this group: requests above the threshold are billed at the base tier; official tiers are for reference only'
+    },
+    table: {
+      model: 'Model',
+      input: 'Input',
+      output: 'Output',
+      cache: 'Cache',
+      cacheWrite: 'Write',
+      cacheRead: 'Read',
+      cacheWriteShort: 'W',
+      cacheReadShort: 'R',
+      tierHint: 'The whole request is billed at the tier matching its total context (input + cache write + cache read)',
+      tierHintMarginal: 'Only the portion above the threshold is billed at this tier; output is unaffected',
+      reasoningMultiplierBadge: '{effort} ×{multiplier}',
+      reasoningMultiplierHint: 'When the forwarded reasoning effort is {effort}, billing and quota usage for the request are multiplied by {multiplier}. Unconfigured levels use 1×',
+      marginalBadge: 'excess-only tiers',
+      timePricingRowHint: 'Requests made within this period ({timezone} time) are billed at the prices in this row',
+      timePricingRowHintWeekdays:
+        'On weekdays (Mon–Fri) only, requests made within this period ({timezone} time) are billed at the prices in this row; weekends use the standard prices',
+      timePricingRowHintPeak:
+        '; prices in this row exclude the peak-hour rate — where this period overlaps the peak hours {window}, the overlapping portion is additionally multiplied by ×{multiplier}',
+      timePricingWeekdays: 'Weekdays',
+      timePricingRateHint: 'Effective rate {rate} × period multiplier {multiplier}',
+      paidPrice: 'Your Price (Discounted)',
+      officialPrice: 'Official Price',
+      rate: 'Rate',
+      unitPerMillion: '$ / 1M tokens',
+      perUnitRequest: '/ request',
+      perUnitImage: '/ image',
+      perRequest: 'Per request',
+      perImage: 'Per image'
+    },
+    nav: {
+      login: 'Sign In',
+      backToDashboard: 'Back to Console'
+    }
+  },
+
   affiliate: {
     title: 'Affiliate Rebates',
     description: 'Invite new users and convert your rebate quota into account balance',
@@ -659,6 +756,8 @@ export default {
       line4: 'Newly earned rebates may have a waiting period before they can be transferred.'
     }
   },
+
+  // Redeem
   redeem: {
     title: 'Redeem Code',
     description: 'Enter your redeem code to add balance or increase concurrency',
@@ -697,9 +796,13 @@ export default {
     days: ' days',
     codeRedeemSuccess: 'Code redeemed successfully!',
     failedToRedeem: 'Failed to redeem code. Please check the code and try again.',
+    historyLoadFailed: 'Failed to load activity. Please try again.',
+    userRefreshFailed: 'Redeemed successfully, but failed to refresh account information.',
     subscriptionRefreshFailed: 'Redeemed successfully, but failed to refresh subscription status.',
     pleaseEnterCode: 'Please enter a redeem code'
   },
+
+  // Profile
   profile: {
     title: 'Profile Settings',
     description: 'Manage your account information and settings',
@@ -740,6 +843,7 @@ export default {
     passwordTooShort: 'Password must be at least 8 characters long',
     passwordChangeSuccess: 'Password changed successfully',
     passwordChangeFailed: 'Failed to change password',
+    // TOTP 2FA
     totp: {
       title: 'Two-Factor Authentication (2FA)',
       description: 'Enhance account security with Google Authenticator or similar apps',
@@ -769,6 +873,7 @@ export default {
       loginTitle: 'Two-Factor Authentication',
       loginHint: 'Enter the 6-digit code from your authenticator app',
       loginFailed: 'Verification failed, please try again',
+      // New translations for email verification
       verifyEmailFirst: 'Please verify your email first',
       verifyPasswordFirst: 'Please verify your identity first',
       emailCode: 'Email Verification Code',
@@ -776,6 +881,31 @@ export default {
       sendCode: 'Send Code',
       codeSent: 'Verification code sent to your email',
       sendCodeFailed: 'Failed to send verification code'
+    },
+    passkey: {
+      title: 'Passkeys',
+      description: 'Use Face ID, Touch ID, Windows Hello, or a security key to sign in without a password.',
+      add: 'Add passkey',
+      continue: 'Create passkey',
+      name: 'Passkey name',
+      namePlaceholder: 'For example, MacBook Touch ID',
+      passwordPlaceholder: 'Enter your current password to confirm',
+      empty: 'No passkeys are registered yet.',
+      synced: 'Synced',
+      createdAt: 'Created {date}',
+      lastUsed: 'Last used {date}',
+      featureDisabled: 'Passkeys have not been configured by the administrator.',
+      unsupported: 'This browser or device does not support passkeys.',
+      loadFailed: 'Failed to load passkeys.',
+      added: 'Passkey added.',
+      addFailed: 'Failed to add passkey.',
+      renamePrompt: 'Enter a new name for this passkey',
+      renamed: 'Passkey renamed.',
+      renameFailed: 'Failed to rename passkey.',
+      deleteTitle: 'Delete passkey',
+      deleteConfirm: 'Delete “{name}”? You will no longer be able to sign in with it.',
+      deleted: 'Passkey deleted.',
+      deleteFailed: 'Failed to delete passkey.'
     },
     balanceNotify: {
       title: 'Balance Low Notification',
@@ -807,7 +937,7 @@ export default {
       emailDuplicate: 'This email already exists',
       maxEmailsReached: 'Maximum number of notification emails reached',
       unverified: 'Unverified',
-      verified: 'Verified'
+      verified: 'Verified',
     },
     avatar: {
       title: 'Profile Avatar',
@@ -822,7 +952,7 @@ export default {
       compressTooLarge: 'Unable to compress this image below 20KB. Try a smaller image.',
       compressFailed: 'Failed to compress the selected image.',
       readFailed: 'Failed to read the selected image.',
-      emptyDeleteHint: 'Avatar is already empty'
+      emptyDeleteHint: 'Avatar is already empty',
     },
     authBindings: {
       title: 'Connected Sign-In Methods',
@@ -845,58 +975,39 @@ export default {
       boundCount: '{count} linked records',
       status: {
         bound: 'Bound',
-        notBound: 'Not bound'
+        notBound: 'Not bound',
       },
       providers: {
         email: 'Email',
         linuxdo: 'LinuxDo',
         dingtalk: 'DingTalk',
         oidc: '{providerName}',
-        wechat: 'WeChat'
+        wechat: 'WeChat',
       },
       notes: {
         emailManagedFromProfile: 'Primary email is managed in the profile form',
         canUnbind: 'You can unbind this sign-in method',
-        bindAnotherBeforeUnbind: 'Bind another sign-in method before unbinding'
+        bindAnotherBeforeUnbind: 'Bind another sign-in method before unbinding',
       },
       source: {
         avatar: 'Avatar is currently synced from {providerName}',
-        username: 'Nickname is currently synced from {providerName}'
-      }
-    },
-    passkey: {
-      title: 'Passkeys',
-      description: 'Use Face ID, Touch ID, Windows Hello, or a security key to sign in without a password.',
-      add: 'Add passkey',
-      continue: 'Create passkey',
-      name: 'Passkey name',
-      namePlaceholder: 'For example, MacBook Touch ID',
-      passwordPlaceholder: 'Enter your current password to confirm',
-      empty: 'No passkeys are registered yet.',
-      synced: 'Synced',
-      createdAt: 'Created {date}',
-      lastUsed: 'Last used {date}',
-      featureDisabled: 'Passkeys have not been configured by the administrator.',
-      unsupported: 'This browser or device does not support passkeys.',
-      loadFailed: 'Failed to load passkeys.',
-      added: 'Passkey added.',
-      addFailed: 'Failed to add passkey.',
-      renamePrompt: 'Enter a new name for this passkey',
-      renamed: 'Passkey renamed.',
-      renameFailed: 'Failed to rename passkey.',
-      deleteTitle: 'Delete passkey',
-      deleteConfirm: 'Delete “{name}”? You will no longer be able to sign in with it.',
-      deleted: 'Passkey deleted.',
-      deleteFailed: 'Failed to delete passkey.'
+        username: 'Nickname is currently synced from {providerName}',
+      },
     }
   },
+
+  // Empty States
   empty: {
     noData: 'No data found'
   },
+
+  // Table
   table: {
     expandActions: 'Expand More Actions',
     collapseActions: 'Collapse Actions'
   },
+
+  // Pagination
   pagination: {
     showing: 'Showing',
     to: 'to',
@@ -912,6 +1023,8 @@ export default {
     jumpPlaceholder: 'Page',
     jumpAction: 'Go'
   },
+
+  // Errors
   errors: {
     somethingWentWrong: 'Something went wrong',
     pageNotFound: 'Page not found',
@@ -922,6 +1035,8 @@ export default {
     timeout: 'Request timeout',
     tryAgain: 'Please try again'
   },
+
+  // Dates
   dates: {
     today: 'Today',
     yesterday: 'Yesterday',
@@ -939,65 +1054,6 @@ export default {
     apply: 'Apply',
     selectDateRange: 'Select date range'
   },
-  modelPlaza: {
-    title: 'Model Plaza',
-    description: 'Browse available models and pricing by group',
-    loading: 'Loading...',
-    empty: 'No groups to display',
-    loadFailed: 'Failed to load model plaza',
-    noSearchResult: 'No matching models',
-    anonymousHint: 'Sign in to see your exclusive groups and personal rates',
-    filters: {
-      platformLabel: 'Platform',
-      groupLabel: 'Group',
-      rateLabel: 'Rate',
-      modelLabel: 'Model',
-      searchPlaceholder: 'Search models',
-      all: 'All'
-    },
-    badges: {
-      exclusive: 'Exclusive',
-      subscription: 'Subscription'
-    },
-    detail: {
-      noModels: 'No models configured for this group',
-      noPricing: 'Pricing not configured',
-      peakNote: 'Peak hours {window}: billing rate ×{multiplier}',
-      longContextDisabledNote: 'Long-context tier pricing is disabled for this group: requests above the threshold are billed at the base tier; official tiers are for reference only'
-    },
-    table: {
-      model: 'Model',
-      input: 'Input',
-      output: 'Output',
-      cache: 'Cache',
-      cacheWrite: 'Write',
-      cacheRead: 'Read',
-      cacheWriteShort: 'W',
-      cacheReadShort: 'R',
-      tierHint: 'The whole request is billed at the tier matching its total context (input + cache write + cache read)',
-      tierHintMarginal: 'Only the portion above the threshold is billed at this tier; output is unaffected',
-      maxReasoningMultiplierBadge: 'Max ×{multiplier}',
-      maxReasoningMultiplierHint: 'When the forwarded reasoning effort is max, billing and quota usage for the request are multiplied by {multiplier}',
-      marginalBadge: 'excess-only tiers',
-      timePricingRowHint: 'Requests made within this period ({timezone} time) are billed at the prices in this row',
-      timePricingRowHintWeekdays:
-        'On weekdays (Mon–Fri) only, requests made within this period ({timezone} time) are billed at the prices in this row; weekends use the standard prices',
-      timePricingRowHintPeak:
-        '; prices in this row exclude the peak-hour rate — where this period overlaps the peak hours {window}, the overlapping portion is additionally multiplied by ×{multiplier}',
-      timePricingWeekdays: 'Weekdays',
-      timePricingRateHint: 'Effective rate {rate} × period multiplier {multiplier}',
-      paidPrice: 'Your Price (Discounted)',
-      officialPrice: 'Official Price',
-      rate: 'Rate',
-      unitPerMillion: '$ / 1M tokens',
-      perUnitRequest: '/ request',
-      perUnitImage: '/ image',
-      perRequest: 'Per request',
-      perImage: 'Per image'
-    },
-    nav: {
-      login: 'Sign In',
-      backToDashboard: 'Back to Console'
-    }
-  }
+
+  // Admin
 }

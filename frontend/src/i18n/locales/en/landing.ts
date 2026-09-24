@@ -133,14 +133,16 @@ export default {
       },
       guidesTitle: 'Setup guides',
       languageSwitchItems: {
-        chinese: '中文版（产品介绍与文档）'
+        chinese: '中文版（产品介绍与文档）',
+        english: 'English version (full product page & docs)'
       },
       languageSwitchTitle: 'Other languages',
       subtitle: 'Comparisons, guides, glossary, and runnable code examples — high-density static pages indexed for search & AI citation',
       title: 'Resources & deep dives',
       trustItems: {
         productHub: 'English product hub (full landing page)',
-        trust: 'Trust, logging & billing overview'
+        trust: 'Trust, logging & billing overview',
+        xinyong: 'Trust & compliance (billing, log boundaries)'
       },
       trustTitle: 'Trust & policies'
     },
@@ -191,6 +193,7 @@ export default {
     usedQuota: 'Used Quota',
     resetNow: 'Resetting soon',
     subscriptionType: 'Subscription Type',
+    billingType: 'Billing Type',
     subscriptionExpires: 'Subscription Expires',
     todayRequests: 'Today Requests',
     todayInputTokens: 'Today Input',

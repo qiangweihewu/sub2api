@@ -34,12 +34,17 @@ func TestApplyClaudeCodeMimicHeaders_DoesNotOverrideExistingFingerprintHeaders(t
 		setHeaderRaw(req.Header, k, v)
 	}
 
-	applyClaudeCodeMimicHeaders(req, true)
+	applyClaudeCodeMimicHeaders(req, true, claude.DefaultUserAgent())
 
 	// Cached fingerprint values must have been preserved, not reverted to
 	// the built-in claude.DefaultHeaders fallback (Linux / arm64 / the
 	// pinned default CLI tuple), since a live client capture can be newer.
 	for k, want := range realFP {
+		if k == "User-Agent" {
+			// UA 例外：每请求统一取 mimicUserAgent，与 billing cc_version 保持一致（上游铁律）。
+			require.Equal(t, claude.DefaultUserAgent(), getHeaderRaw(req.Header, k))
+			continue
+		}
 		require.Equal(t, want, getHeaderRaw(req.Header, k),
 			"cached fingerprint header %q must not be overridden by DefaultHeaders", k)
 	}
@@ -56,9 +61,9 @@ func TestApplyClaudeCodeMimicHeaders_FillsMissingFromDefaults(t *testing.T) {
 	// be populated from the hardcoded fallback.
 	req := httptest.NewRequest(http.MethodPost, "https://api.anthropic.com/v1/messages?beta=true", nil)
 
-	applyClaudeCodeMimicHeaders(req, false)
+	applyClaudeCodeMimicHeaders(req, false, claude.DefaultUserAgent())
 
-	for k, want := range claude.DefaultHeaders {
+	for k, want := range claude.DefaultHeaders() {
 		if want == "" {
 			continue
 		}
@@ -78,23 +83,23 @@ func TestApplyClaudeCodeMimicHeaders_PartialCacheFillsOnlyGaps(t *testing.T) {
 	setHeaderRaw(req.Header, "User-Agent", "claude-cli/2.1.118 (external, cli)")
 	setHeaderRaw(req.Header, "X-Stainless-Package-Version", "0.81.0")
 
-	applyClaudeCodeMimicHeaders(req, false)
+	applyClaudeCodeMimicHeaders(req, false, claude.DefaultUserAgent())
 
-	// Preserved
-	require.Equal(t, "claude-cli/2.1.118 (external, cli)", getHeaderRaw(req.Header, "User-Agent"))
+	// UA 强制为 mimicUserAgent；其余缓存值保留
+	require.Equal(t, claude.DefaultUserAgent(), getHeaderRaw(req.Header, "User-Agent"))
 	require.Equal(t, "0.81.0", getHeaderRaw(req.Header, "X-Stainless-Package-Version"))
 	// Filled from DefaultHeaders
-	require.Equal(t, claude.DefaultHeaders["X-Stainless-OS"], getHeaderRaw(req.Header, "X-Stainless-OS"))
-	require.Equal(t, claude.DefaultHeaders["X-Stainless-Arch"], getHeaderRaw(req.Header, "X-Stainless-Arch"))
-	require.Equal(t, claude.DefaultHeaders["X-Stainless-Runtime"], getHeaderRaw(req.Header, "X-Stainless-Runtime"))
-	require.Equal(t, claude.DefaultHeaders["X-Stainless-Runtime-Version"], getHeaderRaw(req.Header, "X-Stainless-Runtime-Version"))
+	require.Equal(t, claude.DefaultHeaders()["X-Stainless-OS"], getHeaderRaw(req.Header, "X-Stainless-OS"))
+	require.Equal(t, claude.DefaultHeaders()["X-Stainless-Arch"], getHeaderRaw(req.Header, "X-Stainless-Arch"))
+	require.Equal(t, claude.DefaultHeaders()["X-Stainless-Runtime"], getHeaderRaw(req.Header, "X-Stainless-Runtime"))
+	require.Equal(t, claude.DefaultHeaders()["X-Stainless-Runtime-Version"], getHeaderRaw(req.Header, "X-Stainless-Runtime-Version"))
 }
 
 // The upstream passthrough policy runtime is disabled, so ForwardClientUA must
 // never override the Claude Code mimic UA.
 func TestForwardClientUA_DoesNotOverrideMimicUAOnOAuthPath(t *testing.T) {
 	applyOverride := func(req *http.Request, clientHeaders http.Header, ctx context.Context) {
-		applyClaudeCodeMimicHeaders(req, true)
+		applyClaudeCodeMimicHeaders(req, true, claude.DefaultUserAgent())
 		if ShouldForwardClientUA(ctx) {
 			if clientUA := strings.TrimSpace(clientHeaders.Get("User-Agent")); clientUA != "" {
 				setHeaderRaw(req.Header, "User-Agent", clientUA)
@@ -108,7 +113,7 @@ func TestForwardClientUA_DoesNotOverrideMimicUAOnOAuthPath(t *testing.T) {
 
 		applyOverride(req, clientHeaders, context.Background())
 
-		require.Equal(t, claude.DefaultHeaders["User-Agent"], getHeaderRaw(req.Header, "User-Agent"))
+		require.Equal(t, claude.DefaultHeaders()["User-Agent"], getHeaderRaw(req.Header, "User-Agent"))
 	})
 
 	t.Run("policy ForwardClientUA=false → mimic UA wins", func(t *testing.T) {
@@ -118,7 +123,7 @@ func TestForwardClientUA_DoesNotOverrideMimicUAOnOAuthPath(t *testing.T) {
 
 		applyOverride(req, clientHeaders, ctx)
 
-		require.Equal(t, claude.DefaultHeaders["User-Agent"], getHeaderRaw(req.Header, "User-Agent"))
+		require.Equal(t, claude.DefaultHeaders()["User-Agent"], getHeaderRaw(req.Header, "User-Agent"))
 	})
 
 	t.Run("policy ForwardClientUA=true → mimic UA still wins", func(t *testing.T) {
@@ -128,9 +133,9 @@ func TestForwardClientUA_DoesNotOverrideMimicUAOnOAuthPath(t *testing.T) {
 
 		applyOverride(req, clientHeaders, ctx)
 
-		require.Equal(t, claude.DefaultHeaders["User-Agent"], getHeaderRaw(req.Header, "User-Agent"))
+		require.Equal(t, claude.DefaultHeaders()["User-Agent"], getHeaderRaw(req.Header, "User-Agent"))
 		// Sibling mimic headers must still be set — the override is narrow to UA only.
-		require.Equal(t, claude.DefaultHeaders["X-Stainless-Lang"], getHeaderRaw(req.Header, "X-Stainless-Lang"))
+		require.Equal(t, claude.DefaultHeaders()["X-Stainless-Lang"], getHeaderRaw(req.Header, "X-Stainless-Lang"))
 	})
 
 	t.Run("policy ForwardClientUA=true but client UA empty → mimic UA stays", func(t *testing.T) {
@@ -140,7 +145,7 @@ func TestForwardClientUA_DoesNotOverrideMimicUAOnOAuthPath(t *testing.T) {
 
 		applyOverride(req, clientHeaders, ctx)
 
-		require.Equal(t, claude.DefaultHeaders["User-Agent"], getHeaderRaw(req.Header, "User-Agent"))
+		require.Equal(t, claude.DefaultHeaders()["User-Agent"], getHeaderRaw(req.Header, "User-Agent"))
 	})
 
 	t.Run("policy ForwardClientUA=true with whitespace-only client UA → mimic UA stays", func(t *testing.T) {
@@ -150,6 +155,6 @@ func TestForwardClientUA_DoesNotOverrideMimicUAOnOAuthPath(t *testing.T) {
 
 		applyOverride(req, clientHeaders, ctx)
 
-		require.Equal(t, claude.DefaultHeaders["User-Agent"], getHeaderRaw(req.Header, "User-Agent"))
+		require.Equal(t, claude.DefaultHeaders()["User-Agent"], getHeaderRaw(req.Header, "User-Agent"))
 	})
 }

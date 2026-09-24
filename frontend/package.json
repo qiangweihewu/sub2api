@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "vue-tsc -b && vite build",
+    "build": "pnpm run check:i18n && vue-tsc -b && vite build",
+    "check:i18n": "vitest run src/i18n/__tests__/localeKeyCompleteness.spec.ts",
     "dev": "vite",
     "geo:check": "node scripts/geo-upgrade.mjs --check",
     "geo:upgrade": "node scripts/geo-upgrade.mjs",
@@ -65,7 +66,10 @@
     "vue-tsc": "^2.2.0"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild", "vue-demi"],
+    "onlyBuiltDependencies": [
+      "esbuild",
+      "vue-demi"
+    ],
     "overrides": {
       "js-cookie": "3.0.7",
       "form-data@<4.0.6": ">=4.0.6",

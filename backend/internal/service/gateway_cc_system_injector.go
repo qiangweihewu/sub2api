@@ -148,7 +148,7 @@ func (s *GatewayService) maybeInjectClaudeCodeSystemBlocks(body []byte) []byte {
 		// and cch downstream in buildUpstreamRequest. Do not double-inject.
 		return body
 	}
-	version := ExtractCLIVersion(claude.DefaultHeaders["User-Agent"])
+	version := ExtractCLIVersion(claude.DefaultHeaders()["User-Agent"])
 	if version == "" {
 		return body
 	}

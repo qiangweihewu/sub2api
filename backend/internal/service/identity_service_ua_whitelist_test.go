@@ -75,10 +75,10 @@ func TestGetOrCreateFingerprint_NonClaudeCLIUA_NeverTouchesCache(t *testing.T) {
 			require.Equal(t, 0, cache.setCalls, "must not write cache for non-CC UA")
 
 			// Returned fingerprint must be a real CC default, not the client's polluted values
-			require.Equal(t, defaultFingerprint.UserAgent, fp.UserAgent)
-			require.Equal(t, defaultFingerprint.StainlessPackageVersion, fp.StainlessPackageVersion)
-			require.Equal(t, defaultFingerprint.StainlessOS, fp.StainlessOS)
-			require.Equal(t, defaultFingerprint.StainlessRuntimeVersion, fp.StainlessRuntimeVersion)
+			require.Equal(t, defaultFingerprint().UserAgent, fp.UserAgent)
+			require.Equal(t, defaultFingerprint().StainlessPackageVersion, fp.StainlessPackageVersion)
+			require.Equal(t, defaultFingerprint().StainlessOS, fp.StainlessOS)
+			require.Equal(t, defaultFingerprint().StainlessRuntimeVersion, fp.StainlessRuntimeVersion)
 			require.NotEmpty(t, fp.ClientID, "ClientID should be generated per request")
 		})
 	}
@@ -110,7 +110,7 @@ func TestGetOrCreateFingerprint_NonClaudeCLIUA_IgnoresPollutedCache(t *testing.T
 
 	require.Equal(t, 0, cache.getCalls, "must not read cache for non-CC UA even if polluted entry exists")
 	require.Equal(t, 0, cache.setCalls)
-	require.Equal(t, defaultFingerprint.UserAgent, fp.UserAgent, "returned fingerprint must be defaultFingerprint, not polluted cache")
+	require.Equal(t, defaultFingerprint().UserAgent, fp.UserAgent, "returned fingerprint must be defaultFingerprint, not polluted cache")
 	require.NotEqual(t, "poisoned-client-id", fp.ClientID)
 }
 
@@ -133,7 +133,7 @@ func TestGetOrCreateFingerprint_RealClaudeCLI_DiscardsPollutedCacheAndRebuilds(t
 	svc := NewIdentityService(cache)
 
 	headers := http.Header{}
-	headers.Set("User-Agent", "claude-cli/2.1.118 (external, cli)")
+	headers.Set("User-Agent", "claude-cli/2.1.300 (external, cli)")
 	headers.Set("X-Stainless-Lang", "js")
 	headers.Set("X-Stainless-Package-Version", "0.81.0")
 	headers.Set("X-Stainless-OS", "MacOS")
@@ -146,7 +146,7 @@ func TestGetOrCreateFingerprint_RealClaudeCLI_DiscardsPollutedCacheAndRebuilds(t
 
 	require.Equal(t, 1, cache.getCalls, "should read cache once for CC UA")
 	require.Equal(t, 1, cache.setCalls, "should rebuild and write cache after discarding polluted entry")
-	require.Equal(t, "claude-cli/2.1.118 (external, cli)", fp.UserAgent)
+	require.Equal(t, "claude-cli/2.1.300 (external, cli)", fp.UserAgent)
 	require.Equal(t, "0.81.0", fp.StainlessPackageVersion, "should have taken value from real CC headers, not polluted cache")
 	require.Equal(t, "MacOS", fp.StainlessOS)
 	require.Equal(t, "arm64", fp.StainlessArch)
@@ -159,7 +159,7 @@ func TestGetOrCreateFingerprint_RealClaudeCLI_FirstRequest_WritesCache(t *testin
 	svc := NewIdentityService(cache)
 
 	headers := http.Header{}
-	headers.Set("User-Agent", "claude-cli/2.1.118 (external, cli)")
+	headers.Set("User-Agent", "claude-cli/2.1.300 (external, cli)")
 	headers.Set("X-Stainless-Package-Version", "0.81.0")
 	headers.Set("X-Stainless-OS", "MacOS")
 
@@ -168,7 +168,7 @@ func TestGetOrCreateFingerprint_RealClaudeCLI_FirstRequest_WritesCache(t *testin
 
 	require.Equal(t, 1, cache.getCalls)
 	require.Equal(t, 1, cache.setCalls, "must write cache for first real CC request")
-	require.Equal(t, "claude-cli/2.1.118 (external, cli)", fp.UserAgent)
+	require.Equal(t, "claude-cli/2.1.300 (external, cli)", fp.UserAgent)
 	require.NotNil(t, cache.stored)
 	require.Equal(t, fp.UserAgent, cache.stored.UserAgent)
 }
@@ -179,7 +179,7 @@ func TestGetOrCreateFingerprint_RealClaudeCLI_CleanCache_ReturnsCached(t *testin
 	cache := &trackingIdentityCache{
 		initialFP: &Fingerprint{
 			ClientID:                "existing-client-id",
-			UserAgent:               "claude-cli/2.1.118 (external, cli)",
+			UserAgent:               "claude-cli/2.1.300 (external, cli)",
 			StainlessLang:           "js",
 			StainlessPackageVersion: "0.81.0",
 			StainlessOS:             "MacOS",
@@ -192,7 +192,7 @@ func TestGetOrCreateFingerprint_RealClaudeCLI_CleanCache_ReturnsCached(t *testin
 	svc := NewIdentityService(cache)
 
 	headers := http.Header{}
-	headers.Set("User-Agent", "claude-cli/2.1.118 (external, cli)")
+	headers.Set("User-Agent", "claude-cli/2.1.300 (external, cli)")
 
 	fp, err := svc.GetOrCreateFingerprint(context.Background(), 1, headers)
 	require.NoError(t, err)
@@ -200,5 +200,5 @@ func TestGetOrCreateFingerprint_RealClaudeCLI_CleanCache_ReturnsCached(t *testin
 	require.Equal(t, 1, cache.getCalls)
 	require.Equal(t, 0, cache.setCalls, "same-version clean cache should not be re-written")
 	require.Equal(t, "existing-client-id", fp.ClientID)
-	require.Equal(t, "claude-cli/2.1.118 (external, cli)", fp.UserAgent)
+	require.Equal(t, "claude-cli/2.1.300 (external, cli)", fp.UserAgent)
 }

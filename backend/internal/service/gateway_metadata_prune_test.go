@@ -71,9 +71,7 @@ func TestForwardCountTokens_StripsMetadataField(t *testing.T) {
 	body := []byte(`{"model":"claude-opus-4-7","messages":[{"role":"user","content":"hi"}],"metadata":{"user_id":"abc","trace_id":"xyz"}}`)
 
 	// First normalize (no inject — count_tokens path).
-	body, _ = normalizeClaudeOAuthRequestBody(body, "claude-opus-4-7", claudeOAuthNormalizeOptions{
-		stripSystemCacheControl: true,
-	})
+	body, _ = normalizeClaudeOAuthRequestBody(body, "claude-opus-4-7", claudeOAuthNormalizeOptions{})
 
 	// Then the explicit metadata strip (what ForwardCountTokens does after normalize).
 	if gjson.GetBytes(body, "metadata").Exists() {

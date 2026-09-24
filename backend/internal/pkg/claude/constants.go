@@ -16,18 +16,17 @@ import (
 // 立刻发现，但每个 OAuth 账号都会持续被打 third-party 标。让进程 fail-fast 比让
 // 共享池静默劣化更安全。
 //
-// 注意（P1-2 后）：这只校验编译期"默认版本"对齐，运行时的 cliCurrentVersion 由
-// CLIVersionTrackerService 周期性更新，写入时通过 SetCLICurrentVersion 同步刷新
-// DefaultHeaders["User-Agent"]，保持运行时不变量。
+// 注意：这只校验编译期"默认版本"对齐（init 时尚未注入运行期解析器）。运行期
+// DefaultHeaders() 与 billing cc_version 均经 EffectiveCLIVersion() 取版本，天然一致。
 func init() {
-	ua, ok := DefaultHeaders["User-Agent"]
+	ua, ok := DefaultHeaders()["User-Agent"]
 	if !ok {
 		panic("claude.DefaultHeaders missing User-Agent")
 	}
 	const prefix = "claude-cli/"
 	idx := strings.Index(ua, prefix)
 	if idx < 0 {
-		panic(fmt.Sprintf("claude.DefaultHeaders[\"User-Agent\"]=%q is not a claude-cli UA", ua))
+		panic(fmt.Sprintf("claude.DefaultHeaders()[\"User-Agent\"]=%q is not a claude-cli UA", ua))
 	}
 	rest := ua[idx+len(prefix):]
 	end := strings.IndexAny(rest, " (")
@@ -41,8 +40,6 @@ func init() {
 				"Both must be bumped together; see CLIDefaultVersion docstring.",
 			CLIDefaultVersion, ua, uaVersion))
 	}
-	// 初始化运行时变量
-	cliCurrentVersion = CLIDefaultVersion
 }
 
 // Claude Code 客户端相关常量
@@ -65,10 +62,12 @@ const (
 	BetaFastMode                 = "fast-mode-2026-02-01"
 
 	// 新增（对齐官方 CLI 2.1.9x 以来的流量）
-	BetaPromptCachingScope = "prompt-caching-scope-2026-01-05"
-	BetaEffort             = "effort-2025-11-24"
-	BetaRedactThinking     = "redact-thinking-2026-02-12"
-	BetaExtendedCacheTTL   = "extended-cache-ttl-2025-04-11"
+	BetaPromptCachingScope          = "prompt-caching-scope-2026-01-05"
+	BetaEffort                      = "effort-2025-11-24"
+	BetaRedactThinking              = "redact-thinking-2026-02-12"
+	BetaThinkingBindingControls     = "thinking-binding-controls-2026-08-01"
+	BetaMidConversationOutputConfig = "mid-conversation-output-config-2026-07-01"
+	BetaExtendedCacheTTL            = "extended-cache-ttl-2025-04-11"
 
 	// server-side refusal fallback beta 字段族（beta Messages API 专有）。
 	// 客户端（Claude Code / SDK / OpenCode 等）会默认透传 body.fallbacks /
@@ -141,14 +140,16 @@ const DefaultCacheControlTTL = "5m"
 // 下限校验。必须与 DefaultHeaders["User-Agent"] 中的版本号严格一致；不一致会被 Anthropic
 // 判为第三方调用（"Third-party apps now draw from your extra usage"）。
 //
-// ⚠️ 不要直接引用本常量来"读当前生效版本"。生效版本有三级优先级（高 → 低）：
-//  1. DB 设置 system_settings.cli_current_version（由 CLIVersionTrackerService 回填 /
-//     周期性从 npm 更新），经 SetCLICurrentVersion 写入进程内变量；
-//  2. 环境变量 SUB2API_CLAUDE_CLI_VERSION（见 cli_version.go 的 CLIVersion()）；
-//  3. 本常量。
+// ⚠️ 不要直接引用本常量来"读当前生效版本"。生效版本优先级（高 → 低）：
+//  1. 运行期解析器（SetCLIVersionResolver 注入）：面板手动值 claude_code_client_version →
+//     ClaudeCodeVersionSyncService 同步值 → 下面 3/4 层；
+//  2. fork 的 CLIVersionTrackerService 经 SetCLICurrentVersion 推入的值（仅在未注入解析器时生效）；
+//  3. 环境变量 SUB2API_CLAUDE_CLI_VERSION（见 cli_version.go 的 CLIVersion()）；
+//  4. 本常量。
 //
-// 读取生效版本请统一使用 GetCLICurrentVersion()。
-const CLICurrentVersion = "2.1.220"
+// 读取生效版本请统一使用 EffectiveCLIVersion()（GetCLICurrentVersion() 为其别名）。
+// 直接引用本常量只在"表达内置基线"时才正确（例如覆盖值的下限校验）。
+const CLICurrentVersion = "2.1.258"
 
 // CLIDefaultVersion 是"没有 DB 设置时"本进程使用的默认 CLI 版本号：
 // 内置基线 CLICurrentVersion 叠加 SUB2API_CLAUDE_CLI_VERSION 环境覆盖后的结果。
@@ -159,46 +160,43 @@ const CLICurrentVersion = "2.1.220"
 var CLIDefaultVersion = CLIVersion()
 
 var (
-	// cliCurrentVersion 是运行时版本号（DB 设置来源），受 cliVersionMu 保护。
-	cliCurrentVersion string
+	// trackedCLIVersion 是 CLIVersionTrackerService 经 SetCLICurrentVersion 推入的版本号，
+	// 受 cliVersionMu 保护。仅作为 EffectiveCLIVersion 在未注入解析器时的回退层。
+	trackedCLIVersion string
 	cliVersionMu      sync.RWMutex
-
-	// uaVersionRewriteRe 用于在 DefaultHeaders["User-Agent"] 中替换版本号片段。
-	uaVersionRewriteRe = regexp.MustCompile(`claude-cli/\d+\.\d+\.\d+`)
 )
 
 // GetCLICurrentVersion 返回当前生效的 CLI 版本号（线程安全）。
-//
-// 这是唯一的解析入口：DB 设置 > 环境覆盖 > 内置常量。热路径上不读 DB——
-// DB 值由 CLIVersionTrackerService 通过 SetCLICurrentVersion 推入进程内变量。
+// fork 历史入口，现为 EffectiveCLIVersion() 的别名，保证 UA 头、billing cc_version、
+// identity 指纹始终读同一个解析链。
 func GetCLICurrentVersion() string {
-	cliVersionMu.RLock()
-	defer cliVersionMu.RUnlock()
-	if cliCurrentVersion == "" {
-		return CLIDefaultVersion
-	}
-	return cliCurrentVersion
+	return EffectiveCLIVersion()
 }
 
-// SetCLICurrentVersion 更新运行时 CLI 版本号；同步刷新 DefaultHeaders["User-Agent"]。
-// 传入空字符串视为重置为 CLIDefaultVersion（即环境覆盖 / 内置常量）。
+// getTrackedCLIVersion 返回 SetCLICurrentVersion 推入的版本号；未设置或低于内置基线时返回空。
+func getTrackedCLIVersion() string {
+	cliVersionMu.RLock()
+	defer cliVersionMu.RUnlock()
+	if IsSupportedCLIVersion(trackedCLIVersion) {
+		return trackedCLIVersion
+	}
+	return ""
+}
+
+// SetCLICurrentVersion 记录 CLIVersionTrackerService 回填 / 从 npm 拉取的版本号。
+// 传入空字符串视为重置（回退到环境覆盖 / 内置常量）。
 //
 // 仅在严格 semver `X.Y.Z` 格式时接受，否则返回 false 并保持原值（防止 npm 偶发返回
-// pre-release / 错误格式时污染 UA）。
+// pre-release / 错误格式时污染 UA）。User-Agent 不再就地改写：DefaultHeaders() 每次
+// 调用经 DefaultUserAgent() 现取版本。
 func SetCLICurrentVersion(v string) bool {
 	v = strings.TrimSpace(v)
-	if v == "" {
-		v = CLIDefaultVersion
-	}
-	if !semverRe.MatchString(v) {
+	if v != "" && !semverRe.MatchString(v) {
 		return false
 	}
 	cliVersionMu.Lock()
 	defer cliVersionMu.Unlock()
-	cliCurrentVersion = v
-	if ua, ok := DefaultHeaders["User-Agent"]; ok {
-		DefaultHeaders["User-Agent"] = uaVersionRewriteRe.ReplaceAllString(ua, "claude-cli/"+v)
-	}
+	trackedCLIVersion = v
 	return true
 }
 
@@ -222,6 +220,8 @@ func FullClaudeCodeMimicryBetas() []string {
 		BetaPromptCachingScope,
 		BetaEffort,
 		BetaContextManagement,
+		BetaThinkingBindingControls,
+		BetaMidConversationOutputConfig,
 		BetaExtendedCacheTTL,
 	}
 }
@@ -248,22 +248,27 @@ func FullClaudeCodeMimicryBetas() []string {
 //     constructs its SDK client with dangerouslyAllowBrowser: true, so the
 //     SDK emits this header on every request. Omitting it is a third-party
 //     tell. (Wire casing is all-lowercase; see service.resolveWireCasing.)
-var DefaultHeaders = map[string]string{
-	// Keep these in sync with recent Claude CLI traffic to reduce the chance
-	// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
-	// 版本参考：对齐 Parrot (src/transform/cc_mimicry.py:49) 的 CLI_USER_AGENT。
-	// 版本号在运行时由 SetCLICurrentVersion（DB 设置）就地改写，见 uaVersionRewriteRe。
-	"User-Agent":                                "claude-cli/" + CLIVersion() + " (external, cli)",
-	"X-Stainless-Lang":                          "js",
-	"X-Stainless-Package-Version":               "0.94.0",
-	"X-Stainless-OS":                            "Linux",
-	"X-Stainless-Arch":                          "arm64",
-	"X-Stainless-Runtime":                       "node",
-	"X-Stainless-Runtime-Version":               "v24.3.0",
-	"X-Stainless-Retry-Count":                   "0",
-	"X-Stainless-Timeout":                       "600",
-	"X-App":                                     "cli",
-	"Anthropic-Dangerous-Direct-Browser-Access": "true",
+//
+// 每次调用现构造：User-Agent 走 DefaultUserAgent()（运行期可变版本号），
+// 不再在包 init 时固化。同一次请求内应只取一次 UA 字符串并在出站头与
+// billing 两条路径间复用，避免版本缓存翻转瞬间头/体不一致。
+func DefaultHeaders() map[string]string {
+	return map[string]string{
+		// Keep these in sync with recent Claude CLI traffic to reduce the chance
+		// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
+		// 版本参考：对齐 Parrot (src/transform/cc_mimicry.py:49) 的 CLI_USER_AGENT。
+		"User-Agent":                                DefaultUserAgent(),
+		"X-Stainless-Lang":                          "js",
+		"X-Stainless-Package-Version":               "0.94.0",
+		"X-Stainless-OS":                            "Linux",
+		"X-Stainless-Arch":                          "arm64",
+		"X-Stainless-Runtime":                       "node",
+		"X-Stainless-Runtime-Version":               "v24.3.0",
+		"X-Stainless-Retry-Count":                   "0",
+		"X-Stainless-Timeout":                       "600",
+		"X-App":                                     "cli",
+		"Anthropic-Dangerous-Direct-Browser-Access": "true",
+	}
 }
 
 // Model 表示一个 Claude 模型
@@ -311,6 +316,12 @@ var DefaultModels = []Model{
 		Type:        "model",
 		DisplayName: "Claude Opus 4.8",
 		CreatedAt:   "2026-05-29T00:00:00Z",
+	},
+	{
+		ID:          "claude-opus-5-5",
+		Type:        "model",
+		DisplayName: "Claude Opus 5.5",
+		CreatedAt:   "2026-09-22T00:00:00Z",
 	},
 	{
 		ID:          "claude-opus-5",

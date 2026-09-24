@@ -98,7 +98,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			if !enableMPT {
 				accountUUID := account.GetExtraString("account_uuid")
 				if accountUUID != "" && fp.ClientID != "" {
-					mimicUA := claude.DefaultHeaders["User-Agent"]
+					mimicUA := claude.DefaultHeaders()["User-Agent"]
 					if newBody, err := s.identityService.RewriteUserIDWithMasking(ctx, body, account, accountUUID, fp.ClientID, mimicUA); err == nil && len(newBody) > 0 {
 						body = newBody
 					}
@@ -115,10 +115,13 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// 稳定化 tools 数组排序，防止 MCP 工具异步注册导致的顺序抖动破坏 prompt cache prefix
 	body = stabilizeToolOrder(body)
 
-	// 同步 billing header cc_version 与实际发送的 User-Agent 版本。
-	// upstream 994ca26e9：OAuth mimic 路径会在应用完账号指纹后强制改回内置 UA，
-	// 所以计费指纹必须取"最终真正发出去的那个 UA"，而不是 fingerprint.UserAgent。
-	if billingUA := effectiveBillingUserAgent(tokenType, mimicClaudeCode, fingerprint); billingUA != "" {
+	// 一致性铁律：同一次请求内只取一次 mimic UA，出站 User-Agent 头与
+	// 请求体 x-anthropic-billing-header 的 cc_version 都源自这一个字符串，
+	// 避免运行期版本缓存翻转瞬间头/体版本自相矛盾（会被判非正版客户端）。
+	mimicUserAgent := claude.DefaultUserAgent()
+
+	// Mimicry may override the cached User-Agent later, even without a fingerprint.
+	if billingUA := effectiveBillingUserAgent(mimicUserAgent, tokenType, mimicClaudeCode, fingerprint); billingUA != "" {
 		body = syncBillingHeaderVersion(body, billingUA)
 	}
 
@@ -192,6 +195,11 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		body = sanitized
 	}
 
+	// Ollama Cloud DeepSeek 出站 max_tokens clamp：判定与上方 targetURL 的
+	// base 取值同源（GetBaseURL），仅实际上游为 ollama.com 且映射后出站模型
+	// 为 DeepSeek 系时压到 cap，详见 helper 注释。
+	body = clampOllamaCloudAnthropicMessagesMaxTokens(account, account.GetBaseURL(), body)
+
 	// CCH 签名：重写 billing block 的 cc_version 后缀为 SHA256 指纹（并在存在时剥离
 	// cch=00000 占位符）。需在所有 body 修改之后执行，确保指纹覆盖最终上行 body。
 	if enableCCH {
@@ -217,7 +225,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	if tokenType == "oauth" {
 		setHeaderRaw(req.Header, "authorization", "Bearer "+token)
 	} else {
-		setAnthropicAPIKeyAuthHeader(req.Header, account, token)
+		// Ollama Cloud Anthropic 兼容端点按实际 base_url 强制 Bearer（同上方
+		// targetURL 的 base 取值），其余保持 extra/default 行为。
+		setAnthropicAPIKeyAuthHeader(req.Header, account, token, account.GetBaseURL())
 	}
 
 	// 白名单透传 headers
@@ -259,7 +269,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	// OAuth + mimic: apply Claude Code mimic headers (UA, x-stainless-*, x-app, etc.)
 	// (user-agent/x-stainless-*/x-app/Accept/x-stainless-helper-method/x-client-request-id)
 	if tokenType == "oauth" && mimicClaudeCode {
-		applyClaudeCodeMimicHeaders(req, reqStream)
+		applyClaudeCodeMimicHeaders(req, reqStream, mimicUserAgent)
 
 		// ForwardClientUA policy override: when the resolved policy says we
 		// must surface the client's real UA (relay/Transparent profile that
@@ -537,7 +547,7 @@ func applyClaudeOAuthHeaderDefaults(req *http.Request) {
 	if getHeaderRaw(req.Header, "Accept") == "" {
 		setHeaderRaw(req.Header, "Accept", "application/json")
 	}
-	for key, value := range claude.DefaultHeaders {
+	for key, value := range claude.DefaultHeaders() {
 		if value == "" {
 			continue
 		}
@@ -978,19 +988,26 @@ var defaultDroppedBetasSet = buildBetaTokenSet(claude.DroppedBetas)
 // applyClaudeCodeMimicHeaders forces "Claude Code-like" request headers.
 // This mirrors opencode-anthropic-auth behavior: do not trust downstream
 // headers when using Claude Code-scoped OAuth credentials.
-func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool) {
+// mimicUserAgent 由调用方在同一请求内取一次传入，保证出站 User-Agent 头与
+// 请求体 billing attribution 的 cc_version 版本号严格一致。
+func applyClaudeCodeMimicHeaders(req *http.Request, isStream bool, mimicUserAgent string) {
 	if req == nil {
 		return
 	}
 	// 先填通用 OAuth 默认头 (同样遵循 fill-missing 语义)
 	applyClaudeOAuthHeaderDefaults(req)
 	// 对每个 DefaultHeaders 键,仅当缺失时才写入。ApplyFingerprint 已经用 cached
-	// 真实值填过的不要动。
-	for key, value := range claude.DefaultHeaders {
+	// 真实值填过的不要动。User-Agent 例外：强制为 mimicUserAgent，与 billing
+	// cc_version 同源（上游一致性铁律），避免头/体版本自相矛盾。
+	for key, value := range claude.DefaultHeaders() {
 		if value == "" {
 			continue
 		}
 		wireKey := resolveWireCasing(key)
+		if key == "User-Agent" {
+			setHeaderRaw(req.Header, wireKey, mimicUserAgent)
+			continue
+		}
 		if getHeaderRaw(req.Header, wireKey) != "" {
 			continue
 		}

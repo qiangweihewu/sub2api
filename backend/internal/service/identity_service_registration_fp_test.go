@@ -45,9 +45,9 @@ func TestGetOrCreateFingerprintForAccount_NonCC_UsesRegistrationFingerprint(t *t
 	require.Equal(t, "arm64", fp.StainlessArch, "should use arm64 from registration fp")
 
 	// runtime/runtime_version preserved as default (CLI mimicry)
-	require.Equal(t, defaultFingerprint.StainlessRuntime, fp.StainlessRuntime)
-	require.Equal(t, defaultFingerprint.StainlessRuntimeVersion, fp.StainlessRuntimeVersion)
-	require.Equal(t, defaultFingerprint.UserAgent, fp.UserAgent)
+	require.Equal(t, defaultFingerprint().StainlessRuntime, fp.StainlessRuntime)
+	require.Equal(t, defaultFingerprint().StainlessRuntimeVersion, fp.StainlessRuntimeVersion)
+	require.Equal(t, defaultFingerprint().UserAgent, fp.UserAgent)
 	require.NotEmpty(t, fp.ClientID)
 }
 
@@ -66,9 +66,9 @@ func TestGetOrCreateFingerprintForAccount_NonCC_NoRegFp_FallsBackToDefault(t *te
 	require.NotNil(t, fp)
 
 	// Falls back to defaultFingerprint
-	require.Equal(t, defaultFingerprint.StainlessOS, fp.StainlessOS)
-	require.Equal(t, defaultFingerprint.StainlessArch, fp.StainlessArch)
-	require.Equal(t, defaultFingerprint.UserAgent, fp.UserAgent)
+	require.Equal(t, defaultFingerprint().StainlessOS, fp.StainlessOS)
+	require.Equal(t, defaultFingerprint().StainlessArch, fp.StainlessArch)
+	require.Equal(t, defaultFingerprint().UserAgent, fp.UserAgent)
 }
 
 func TestGetOrCreateFingerprintForAccount_NilAccount_FallsBackToDefault(t *testing.T) {
@@ -81,7 +81,7 @@ func TestGetOrCreateFingerprintForAccount_NilAccount_FallsBackToDefault(t *testi
 	fp, err := svc.GetOrCreateFingerprintForAccount(context.Background(), nil, headers)
 	require.NoError(t, err)
 	require.NotNil(t, fp)
-	require.Equal(t, defaultFingerprint.StainlessOS, fp.StainlessOS)
+	require.Equal(t, defaultFingerprint().StainlessOS, fp.StainlessOS)
 }
 
 // TestGetOrCreateFingerprintForAccount_RealCC_IgnoresRegFp ensures that real Claude CLI
@@ -142,7 +142,7 @@ func TestGetOrCreateFingerprintForAccount_NonCC_PartialRegFp(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, "Windows", fp.StainlessOS, "OS should be overridden")
-	require.Equal(t, defaultFingerprint.StainlessArch, fp.StainlessArch, "empty Arch should preserve default")
+	require.Equal(t, defaultFingerprint().StainlessArch, fp.StainlessArch, "empty Arch should preserve default")
 }
 
 // TestGetOrCreateFingerprint_LegacyAPI_StillWorks ensures the deprecated method continues
@@ -159,7 +159,7 @@ func TestGetOrCreateFingerprint_LegacyAPI_StillWorks(t *testing.T) {
 	require.NotNil(t, fp)
 
 	// Legacy API has no account → cannot apply reg fp → uses default
-	require.Equal(t, defaultFingerprint.StainlessOS, fp.StainlessOS)
+	require.Equal(t, defaultFingerprint().StainlessOS, fp.StainlessOS)
 }
 
 // TestGetOrCreateFingerprintForAccount_NonCC_AppliesPerAccountVersionDithering verifies
@@ -167,7 +167,7 @@ func TestGetOrCreateFingerprint_LegacyAPI_StillWorks(t *testing.T) {
 func TestGetOrCreateFingerprintForAccount_NonCC_AppliesPerAccountVersionDithering(t *testing.T) {
 	origRecent := GetCachedRecentVersions()
 	t.Cleanup(func() { SetCachedRecentVersions(origRecent) })
-	SetCachedRecentVersions([]string{"2.1.117", "2.1.116", "2.1.115"})
+	SetCachedRecentVersions([]string{"2.1.302", "2.1.301", "2.1.300"})
 
 	svc := NewIdentityService(&trackingIdentityCache{})
 
@@ -192,6 +192,6 @@ func TestGetOrCreateFingerprintForAccount_NonCC_AppliesPerAccountVersionDitherin
 	a1, _ := svc.GetOrCreateFingerprintForAccount(context.Background(), &Account{ID: 99}, headers)
 	a2, _ := svc.GetOrCreateFingerprintForAccount(context.Background(), &Account{ID: 99}, headers)
 	require.Equal(t, a1.UserAgent, a2.UserAgent, "same accountID should produce same UA")
-	expectedUA := claude.BuildUserAgentForVersion(claude.PickVersionForAccount(99, []string{"2.1.117", "2.1.116", "2.1.115"}))
+	expectedUA := claude.BuildUserAgentForVersion(claude.PickVersionForAccount(99, []string{"2.1.302", "2.1.301", "2.1.300"}))
 	require.Equal(t, expectedUA, a1.UserAgent)
 }

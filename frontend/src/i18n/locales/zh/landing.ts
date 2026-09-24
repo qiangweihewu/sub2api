@@ -108,28 +108,40 @@ export default {
     },
     resources: {
       compareItems: {
-        claudeVsChatgpt: 'Claude API vs ChatGPT API 对比'
+        claudeCodeVsSubscription: 'Claude Code：中转 vs 官方订阅',
+        claudeVsChatgpt: 'Claude API vs ChatGPT API 对比',
+        tokenproviderVsOfficial: 'TokenProvider vs 官方 Claude API'
       },
       compareTitle: '横向对比',
       examplesItems: {
-        claudeApiPython: 'Claude API Python 示例'
+        chatgptApiCurl: 'ChatGPT API curl 示例',
+        claudeApiNodejs: 'Claude API Node.js 示例',
+        claudeApiPython: 'Claude API Python 示例',
+        geminiApiExample: 'Gemini API 示例'
       },
       examplesTitle: '代码示例',
       glossaryItems: {
+        whatIsAnAiToken: '什么是 AI Token？',
+        whatIsClaudeCode: '什么是 Claude Code？',
         whatIsClaudeRelay: '什么是 Claude 中转站？'
       },
       glossaryTitle: '术语速读',
       guidesItems: {
-        claudeCodeSetup: 'Claude Code 5 分钟接入教程'
+        claudeCodeSetup: 'Claude Code 5 分钟接入教程',
+        clineCheapClaude: 'Cline 接入便宜 Claude API',
+        cursorClaudeProxy: 'Cursor + Claude 代理配置'
       },
       guidesTitle: '配置教程',
       languageSwitchItems: {
+        chinese: '中文版（产品介绍与文档）',
         english: 'English version (full product page & docs)'
       },
       languageSwitchTitle: '其他语言',
       subtitle: '对比、教程、术语与代码示例 —— 高信息密度静态页面',
       title: '深入了解',
       trustItems: {
+        productHub: '英文产品导航（完整主页）',
+        trust: '信任、日志与计费说明',
         xinyong: '信任与合规说明（计费、日志边界）'
       },
       trustTitle: '信任与合规'
@@ -181,6 +193,7 @@ export default {
     usedQuota: '已用额度',
     resetNow: '即将重置',
     subscriptionType: '订阅类型',
+    billingType: '计费方式',
     subscriptionExpires: '订阅到期',
     todayRequests: '今日请求',
     todayInputTokens: '今日输入',
