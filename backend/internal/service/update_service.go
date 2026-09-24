@@ -25,12 +25,20 @@ import (
 var (
 	ErrNoUpdateAvailable         = infraerrors.Conflict("ALREADY_UP_TO_DATE", "no update available; current version is latest")
 	ErrRollbackVersionNotAllowed = infraerrors.BadRequest("ROLLBACK_VERSION_NOT_ALLOWED", "version is not in the allowed rollback list")
+	// Fork: prod runs as a Docker image built by deploy/install-custom.sh, so an
+	// in-place binary swap would be lost on container recreate. Upgrades and
+	// rollbacks go through the script instead.
+	ErrInPlaceUpdateDisabled = infraerrors.BadRequest("IN_PLACE_UPDATE_DISABLED", "in-place update is disabled for this fork; run: curl -sSL https://raw.githubusercontent.com/qiangweihewu/sub2api/main/deploy/install-custom.sh | sudo VERSION=vX.Y.Z bash -s -- upgrade")
+
+	// inPlaceUpdateEnabled is a var (not const) so upstream's updater body stays
+	// reachable for vet/lint and merges cleanly.
+	inPlaceUpdateEnabled = false
 )
 
 const (
 	updateCacheKey = "update_check_cache"
-	updateCacheTTL = 1200 // 20 minutes
-	githubRepo     = "Wei-Shaw/sub2api"
+	updateCacheTTL = 1200                   // 20 minutes
+	githubRepo     = "qiangweihewu/sub2api" // fork: check our own releases, never upstream's
 
 	// Security: allowed download domains for updates
 	allowedDownloadHost = "github.com"
@@ -179,6 +187,9 @@ func (s *UpdateService) PerformUpdate(ctx context.Context) error {
 // verifies its checksum, and atomically swaps the running binary.
 // Shared by PerformUpdate (latest) and RollbackToVersion (specific older version).
 func (s *UpdateService) applyReleaseAssets(ctx context.Context, releaseAssets []Asset) error {
+	if !inPlaceUpdateEnabled {
+		return ErrInPlaceUpdateDisabled
+	}
 	// Find matching archive and checksum for current platform
 	archiveName := s.getArchiveName()
 	var downloadURL string

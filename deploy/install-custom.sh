@@ -422,7 +422,7 @@ do_rollback() {
     if ! docker image inspect "${IMAGE_NAME}:previous" >/dev/null 2>&1; then
         print_error "No ${IMAGE_NAME}:previous image found. Cannot rollback."
         print_info "To install a specific prior version, run:"
-        print_info "  VERSION=vX.Y.Z curl -sSL <install-custom-url> | sudo -E bash -s -- upgrade"
+        print_info "  curl -sSL <install-custom-url> | sudo VERSION=vX.Y.Z bash -s -- upgrade"
         exit 1
     fi
 

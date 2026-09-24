@@ -183,5 +183,5 @@ func TestUpdateServiceRollbackToVersionAcceptsVPrefix(t *testing.T) {
 
 	require.Error(t, err)
 	require.NotErrorIs(t, err, ErrRollbackVersionNotAllowed)
-	require.Contains(t, err.Error(), "no compatible release found")
+	require.ErrorIs(t, err, ErrInPlaceUpdateDisabled) // fork: in-place update disabled
 }
