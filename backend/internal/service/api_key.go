@@ -63,8 +63,9 @@ type APIKey struct {
 	Window1dStart *time.Time // Start of current 1d window
 	Window7dStart *time.Time // Start of current 7d window
 
-	// CacheStrategy 表达用户级缓存 TTL 偏好。仅在绑定账号 SupportsCachePolicy()
-	// 时生效；否则该值被忽略（前端也会禁用对应控件）。
+	// CacheStrategy 表达用户级缓存 TTL 偏好。只在请求侧会强制改写 TTL 的账号
+	// （Anthropic OAuth / SetupToken，见 accountEnforcesCacheTTLRequestRewrite）上
+	// 同时改写请求并按偏好计费；其他账号按上游实际 TTL 计费。
 	// 合法取值：CacheStrategyAuto / CacheStrategyCostPriority / CacheStrategyLatencyPriority。
 	CacheStrategy string
 

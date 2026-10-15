@@ -1645,6 +1645,60 @@ func (r *accountRepository) UpdateGrokOAuthCredentialsIfUnchanged(
 	return true, nil
 }
 
+var _ service.AnthropicOAuthRefreshSuccessRepository = (*accountRepository)(nil)
+
+// PatchOAuthCredentialsIfRefreshTokenUnchanged merges a refresh result into
+// the stored credentials only while refresh_token still equals the one the
+// upstream refresh consumed. A completed re-authorization replaces
+// refresh_token, so a late result from the old session is rejected instead of
+// overwriting it. The patch is merged with jsonb ||, leaving concurrently
+// edited non-auth keys intact. The scheduler outbox insert shares the
+// statement, so the invalidation commits atomically with the update.
+func (r *accountRepository) PatchOAuthCredentialsIfRefreshTokenUnchanged(
+	ctx context.Context,
+	id int64,
+	expectedRefreshToken string,
+	patch map[string]any,
+) (bool, error) {
+	if r == nil || r.sql == nil {
+		return false, errors.New("account repository SQL executor is not configured")
+	}
+	patchJSON, err := json.Marshal(normalizeJSONMap(patch))
+	if err != nil {
+		return false, err
+	}
+	result, err := r.sql.ExecContext(ctx, `
+		WITH updated AS (
+		UPDATE accounts AS a
+		SET credentials = COALESCE(a.credentials, '{}'::jsonb) || $1::jsonb,
+			updated_at = NOW()
+		WHERE a.id = $2
+			AND a.deleted_at IS NULL
+			AND a.credentials ->> 'refresh_token' IS NOT DISTINCT FROM NULLIF($3, '')
+		RETURNING a.id
+		)
+		INSERT INTO scheduler_outbox (event_type, account_id, group_id, payload)
+		SELECT $4, updated.id, NULL, NULL FROM updated
+	`,
+		string(patchJSON),
+		id,
+		expectedRefreshToken,
+		service.SchedulerOutboxEventAccountChanged,
+	)
+	if err != nil {
+		return false, err
+	}
+	rowsAffected, err := result.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	if rowsAffected == 0 {
+		return false, nil
+	}
+	r.syncSchedulerAccountSnapshotDetached(ctx, id)
+	return true, nil
+}
+
 // SetGrokOAuthRefreshErrorIfCredentialsUnchanged is the background-refresh
 // counterpart to reconciliation's stricter missing-refresh-token mutation. It
 // matches the complete credential document used by the failed upstream attempt

@@ -336,11 +336,11 @@ export default {
       auto: '自动（推荐）',
       autoDesc: '跟随账号 / 平台默认设置',
       costPriority: '优先省钱',
-      costPriorityDesc: '强制 5 分钟缓存，命中率较高的短会话最划算',
-      hint: '决定此密钥请求的缓存 TTL 行为。仅在调度到 Anthropic 系账号（OAuth / Setup Token / API Key / Bedrock / Vertex）时生效，其他平台自动忽略。',
+      costPriorityDesc: '使用 5 分钟缓存，命中率较高的短会话最划算',
+      hint: '决定此密钥请求的缓存 TTL。调度到 Claude OAuth / Setup Token 账号时，会强制按所选时长缓存并计费；其他账号（API Key / Bedrock / Vertex 等）不改写请求，按上游实际缓存时长计费；非 Anthropic 平台自动忽略。',
       label: '缓存策略',
       latencyPriority: '优先低延迟',
-      latencyPriorityDesc: '强制 1 小时缓存，长会话或频繁复用 prompt 更划算（5m → 1h 单价约高 2 倍）'
+      latencyPriorityDesc: '使用 1 小时缓存，长会话或频繁复用 prompt 更划算（1 小时缓存写入单价约为 5 分钟的 1.6 倍）'
     }
   },
 

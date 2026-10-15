@@ -1131,10 +1131,22 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 					if clientDisconnected {
 						return &streamingResult{usage: usage, firstTokenMs: firstTokenMs, clientDisconnect: true}, nil
 					}
-					return nil, err
+					// 与错误一起返回已观测 usage：若内容已交付给客户端，Forward 据此入账。
+					return &streamingResult{usage: usage, firstTokenMs: firstTokenMs}, err
 				}
 
 				for _, block := range outputBlocks {
+					// 先归集 usage 再交付：该帧写客户端失败时，后续 drain 不会再读到它，
+					// 携带最终 output_tokens 的 message_delta 会因此漏记。
+					if data != "" {
+						if firstTokenMs == nil && data != "[DONE]" {
+							ms := int(time.Since(startTime).Milliseconds())
+							firstTokenMs = &ms
+						}
+						if usagePatch != nil {
+							mergeSSEUsagePatch(usage, usagePatch)
+						}
+					}
 					if !clientDisconnected {
 						restored := reverseToolNamesIfPresent(c, []byte(block))
 						if _, werr := fmt.Fprint(w, string(restored)); werr != nil {
@@ -1145,15 +1157,6 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 						flusher.Flush()
 						lastDataAt = time.Now()
 						resetKeepaliveTimer()
-					}
-					if data != "" {
-						if firstTokenMs == nil && data != "[DONE]" {
-							ms := int(time.Since(startTime).Milliseconds())
-							firstTokenMs = &ms
-						}
-						if usagePatch != nil {
-							mergeSSEUsagePatch(usage, usagePatch)
-						}
 					}
 				}
 				continue

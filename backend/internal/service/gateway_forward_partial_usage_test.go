@@ -292,7 +292,8 @@ func TestGatewayService_Forward_PostOutputSSEOverloadedErrorKeepsExistingStatus(
 
 	result, err := svc.Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
 	require.Error(t, err)
-	require.Nil(t, result)
+	require.NotNil(t, result, "post-output SSE error must carry observed usage for billing")
+	require.Equal(t, 1, result.Usage.InputTokens)
 
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
@@ -342,4 +343,92 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamMissingTerminalP
 	require.Equal(t, 2, result.Usage.CacheReadInputTokens)
 	require.Equal(t, 3, result.Usage.OutputTokens)
 	require.Equal(t, "claude-3-7-sonnet-20250219", result.Model)
+}
+
+// 上游先输出内容和 usage，再发 event:error：handler 不能切号，只能终止流，
+// 因此 Forward 必须带回已观测 usage，否则整笔请求漏记。
+func TestGatewayService_Forward_PostOutputSSEErrorPreservesObservedUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	body := []byte(`{"model":"claude-haiku-4-5-20251001","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+
+	fixture := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":11}}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\n" +
+		"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"interrupted\"}}\n\n"
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     sseResponseHeader(),
+		Body:       io.NopCloser(strings.NewReader(fixture)),
+	}}
+
+	result, err := newForwardPartialUsageServiceForTest(upstream).Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
+	require.Error(t, err)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Contains(t, rec.Body.String(), "message_delta")
+	require.NotNil(t, result)
+	require.Equal(t, 11, result.Usage.InputTokens)
+	require.Equal(t, 7, result.Usage.OutputTokens)
+	require.True(t, result.Stream)
+}
+
+// 尚未输出就收到 event:error 时仍走切号重试，result 必须保持 nil 以防重复计费。
+func TestGatewayService_Forward_PreOutputSSEErrorKeepsNilResult(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	body := []byte(`{"model":"claude-haiku-4-5-20251001","stream":true,"messages":[{"role":"user","content":"hello"}]}`)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+
+	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     sseResponseHeader(),
+		Body:       io.NopCloser(strings.NewReader("event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"x\"}}\n\n")),
+	}}
+
+	result, err := newForwardPartialUsageServiceForTest(upstream).Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Nil(t, result)
+	require.Empty(t, rec.Body.String())
+}
+
+type failMessageDeltaWriter struct{ gin.ResponseWriter }
+
+func (w *failMessageDeltaWriter) Write(data []byte) (int, error) {
+	if strings.Contains(string(data), "message_delta") {
+		return 0, io.ErrClosedPipe
+	}
+	return w.ResponseWriter.Write(data)
+}
+
+// 写客户端失败的那一帧若携带最终 output_tokens，也必须计入 usage。
+func TestGatewayService_HandleStreamingResponse_FailedWriteStillAccountsFrameUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Writer = &failMessageDeltaWriter{c.Writer}
+
+	fixture := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":11}}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	resp := &http.Response{StatusCode: http.StatusOK, Header: sseResponseHeader(), Body: io.NopCloser(strings.NewReader(fixture))}
+
+	result, err := newStreamingResponseTestGatewayService().handleStreamingResponse(context.Background(), resp, c, newAnthropicOAuthAccountForPartialUsageTest(), time.Now(), "model", "model", false)
+	require.NoError(t, err)
+	require.True(t, result.clientDisconnect)
+	require.Equal(t, 11, result.usage.InputTokens)
+	require.Equal(t, 7, result.usage.OutputTokens)
 }

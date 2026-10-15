@@ -137,6 +137,11 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	// 7. Enforce cache_control block limit
 	anthropicBody = enforceCacheControlLimit(anthropicBody)
 
+	// 7a. 缓存 TTL 与计费归类走同一策略（用户偏好 / 全局 1h 注入），避免按 1h 计费而上游只建 5m。
+	if ttlTarget, ok := s.resolveCacheTTLRequestRewriteTarget(ctx, account, apiKeyFromGinContext(c)); ok {
+		anthropicBody = forceEphemeralCacheControlTTL(anthropicBody, ttlTarget)
+	}
+
 	// 8. Get access token
 	token, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {

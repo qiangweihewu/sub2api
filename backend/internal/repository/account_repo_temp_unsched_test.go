@@ -398,3 +398,36 @@ func (e *recordingSQLExecutor) ExecContext(ctx context.Context, query string, ar
 func (e *recordingSQLExecutor) QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error) {
 	return nil, sql.ErrNoRows
 }
+
+func TestAccountRepository_PatchOAuthCredentialsIfRefreshTokenUnchanged_GuardsOnRefreshTokenAndMerges(t *testing.T) {
+	exec := &recordingSQLExecutor{result: rowsAffectedResult(1)}
+	repo := newAccountRepositoryWithSQL(nil, exec, nil)
+
+	applied, err := repo.PatchOAuthCredentialsIfRefreshTokenUnchanged(
+		context.Background(),
+		42,
+		"attempted-refresh",
+		map[string]any{"refresh_token": "rotated", "_token_version": int64(10)},
+	)
+
+	require.NoError(t, err)
+	require.True(t, applied)
+	require.Len(t, exec.execQueries, 1)
+	normalized := normalizeSQLWhitespace(exec.execQueries[0])
+	require.Contains(t, normalized, "WITH updated AS")
+	require.Contains(t, normalized, "COALESCE(a.credentials, '{}'::jsonb) || $1::jsonb")
+	require.Contains(t, normalized, "credentials ->> 'refresh_token' IS NOT DISTINCT FROM NULLIF($3, '')")
+	require.Contains(t, normalized, "INSERT INTO scheduler_outbox")
+	require.Len(t, exec.execArgs[0], 4)
+	require.Equal(t, "attempted-refresh", exec.execArgs[0][2])
+}
+
+func TestAccountRepository_PatchOAuthCredentialsIfRefreshTokenUnchanged_ReportsMiss(t *testing.T) {
+	exec := &recordingSQLExecutor{result: rowsAffectedResult(0)}
+	repo := newAccountRepositoryWithSQL(nil, exec, nil)
+
+	applied, err := repo.PatchOAuthCredentialsIfRefreshTokenUnchanged(context.Background(), 42, "stale", map[string]any{"refresh_token": "x"})
+
+	require.NoError(t, err)
+	require.False(t, applied)
+}

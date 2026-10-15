@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"strconv"
 	"strings"
 	"sync"
@@ -31,6 +32,21 @@ type GrokOAuthRefreshSuccessRepository interface {
 		expectedCredentials map[string]any,
 		expectedProxyID *int64,
 		credentials map[string]any,
+	) (bool, error)
+}
+
+// AnthropicOAuthRefreshSuccessRepository persists a Claude OAuth refresh only
+// while the stored refresh_token is still the one the upstream call consumed.
+// A concurrent re-authorization replaces refresh_token, so a late refresh
+// result from the previous session must not overwrite it. The patch carries
+// only the keys the refresh changed, so concurrent edits to non-auth keys
+// (model_mapping etc.) are not rolled back either.
+type AnthropicOAuthRefreshSuccessRepository interface {
+	PatchOAuthCredentialsIfRefreshTokenUnchanged(
+		ctx context.Context,
+		id int64,
+		expectedRefreshToken string,
+		patch map[string]any,
 	) (bool, error)
 }
 
@@ -350,6 +366,23 @@ func (api *OAuthRefreshAPI) RefreshIfNeeded(
 			// while the provider call was in flight. Return the durable row so
 			// post-refresh cache publication cannot restore that stale snapshot.
 			freshAccount = durableAccount
+		} else if freshAccount.IsAnthropicOAuthOrSetupToken() && !freshAccount.IsCredentialShadow() {
+			currentAccount, applied, updateErr := api.persistAnthropicOAuthRefresh(ctx, freshAccount, attemptedAccount, newCredentials)
+			if updateErr != nil {
+				slog.Error("oauth_refresh_update_failed",
+					"account_id", freshAccount.ID,
+					"error", updateErr,
+				)
+				return nil, fmt.Errorf("%w: %v", errOAuthRefreshCredentialPersist, updateErr)
+			}
+			if !applied {
+				slog.Info("oauth_refresh_success_cas_skipped_stale_credentials",
+					"account_id", freshAccount.ID,
+					"platform", freshAccount.Platform,
+				)
+				return &OAuthRefreshResult{Account: currentAccount}, nil
+			}
+			freshAccount = currentAccount
 		} else if updateErr := persistAccountCredentials(ctx, api.accountRepo, freshAccount, newCredentials); updateErr != nil {
 			slog.Error("oauth_refresh_update_failed",
 				"account_id", freshAccount.ID,
@@ -382,6 +415,60 @@ func (api *OAuthRefreshAPI) releaseRefreshLock(parent context.Context, cacheKey 
 	if err := api.tokenCache.ReleaseRefreshLock(ctx, cacheKey); err != nil {
 		slog.Warn("oauth_refresh_lock_release_failed", "cache_key", cacheKey, "error", err)
 	}
+}
+
+// persistAnthropicOAuthRefresh writes the refresh result only if the stored
+// refresh_token is still the one used by the upstream call. It returns the
+// durable account to continue with: the updated row when applied, or the
+// current row (e.g. a completed re-authorization) when the write was skipped.
+func (api *OAuthRefreshAPI) persistAnthropicOAuthRefresh(
+	ctx context.Context,
+	freshAccount *Account,
+	attemptedAccount *Account,
+	newCredentials map[string]any,
+) (*Account, bool, error) {
+	casRepo, ok := api.accountRepo.(AnthropicOAuthRefreshSuccessRepository)
+	if !ok {
+		// 测试桩等未实现条件写入的仓库：退回整份写入的旧行为。
+		if err := persistAccountCredentials(ctx, api.accountRepo, freshAccount, newCredentials); err != nil {
+			return nil, false, err
+		}
+		return freshAccount, true, nil
+	}
+
+	expectedRefreshToken := attemptedAccount.GetCredential("refresh_token")
+	patch := changedCredentialFields(attemptedAccount.Credentials, newCredentials)
+	applied, err := casRepo.PatchOAuthCredentialsIfRefreshTokenUnchanged(ctx, freshAccount.ID, expectedRefreshToken, patch)
+	if err != nil {
+		return nil, false, err
+	}
+
+	currentAccount, readErr := api.accountRepo.GetByID(ctx, freshAccount.ID)
+	if readErr != nil || currentAccount == nil {
+		if !applied {
+			if readErr == nil {
+				readErr = fmt.Errorf("account not found after OAuth refresh CAS miss")
+			}
+			return nil, false, readErr
+		}
+		// 已写入但回读失败：按写入内容继续，与旧行为一致。
+		freshAccount.Credentials = shallowCopyMap(newCredentials)
+		return freshAccount, true, nil
+	}
+	return currentAccount, applied, nil
+}
+
+// changedCredentialFields returns the keys whose value differs from the
+// snapshot used for the refresh call (including newly added keys).
+func changedCredentialFields(before, after map[string]any) map[string]any {
+	patch := make(map[string]any, len(after))
+	for key, value := range after {
+		if old, exists := before[key]; exists && reflect.DeepEqual(old, value) {
+			continue
+		}
+		patch[key] = value
+	}
+	return patch
 }
 
 func (api *OAuthRefreshAPI) loadGrokDurableAccountAfterPersist(parent context.Context, cacheKey string, accountID int64) (*Account, error) {

@@ -3033,19 +3033,33 @@ func (s *GatewayService) resolveCacheTTLUsageOverride(ctx context.Context, accou
 	if account == nil {
 		return "", false, "skip:no_account"
 	}
+	userPrefIgnoredTrace := ""
 	if apiKey != nil {
 		if t, applied := apiKey.CacheStrategyTTLTarget(); applied {
 			// 用户偏好仅在账号支持缓存策略时才生效；否则保持 trace 显式记录"被忽略"
 			// 以便运营排查"用户选了但没生效"的反馈。
-			if account.SupportsCachePolicy() {
+			if !account.SupportsCachePolicy() {
+				return "", false, "user_pref_ignored:account_unsupported"
+			}
+			// 用户偏好承诺的是"上游实际按该 TTL 缓存"。只有请求侧会强制改写 TTL 的
+			// 账号才能按偏好归类，否则会出现"上游 5m、按 1h 收费"的多收。
+			if accountEnforcesCacheTTLRequestRewrite(account) {
 				return t, true, "user_pref:" + t
 			}
-			return "", false, "user_pref_ignored:account_unsupported"
+			userPrefIgnoredTrace = "user_pref_ignored:not_enforced"
 		}
 	}
 	if account.IsCacheTTLOverrideEnabled() {
 		t := account.GetCacheTTLOverrideTarget()
-		return t, true, "acct_override:" + t
+		trace := "acct_override:" + t
+		if userPrefIgnoredTrace != "" {
+			// 列宽只有 64，这里用短标记，给后面追加的缓存注入 trace 留出空间。
+			trace += ";pref_ignored"
+		}
+		return t, true, trace
+	}
+	if userPrefIgnoredTrace != "" {
+		return "", false, userPrefIgnoredTrace
 	}
 	if account.IsAnthropicOAuthOrSetupToken() {
 		if s != nil && s.settingService != nil && s.settingService.IsAnthropicCacheTTL1hInjectionEnabled(ctx) {
@@ -3056,18 +3070,38 @@ func (s *GatewayService) resolveCacheTTLUsageOverride(ctx context.Context, accou
 	return "", false, "skip:not_supported"
 }
 
-// resolveCacheTTLRequestRewriteTarget 决定请求体 cache_control TTL 的强制目标。
-// 当前与 usage 归类共用同一优先级链；保留为独立函数以便未来在需要时分化
-// （例如：允许"upstream 用 1h，billing 按 5m"被显式拒绝、或允许"upstream 用 5m
-// 但 usage 计 1h"被显式允许）。任何分化都应当在 [resolveCacheTTLUsageOverride]
-// 与本函数之间引入显式断言以保护合规。
+// resolveCacheTTLRequestRewriteTarget 决定请求体已有 ephemeral cache_control 的强制 TTL。
+// 优先级链（高 → 低）：
+//  1. 用户级偏好（仅请求侧可强制改写的账号，见 [accountEnforcesCacheTTLRequestRewrite]）
+//  2. 全局 1h 注入（仅 Anthropic OAuth/SetupToken）
+//  3. 否则：不改写，保持客户端原值
 //
-// 调用者（如 B 的 addMessageCacheBreakpointsSafe）应据此决定注入的断点 TTL；
-// 若返回 ok=false，应使用其历史默认（通常 5m）。
+// 与 [resolveCacheTTLUsageOverride] 的差异是有意的：账号级 TTL 覆盖只改计费归类
+// （后台文案"按指定 TTL 计费"），不改上游请求；全局注入上游用 1h、计费归回 5m。
+// 用户偏好在两侧必须一致，否则会出现"上游 5m、按 1h 收费"的多收。
 func (s *GatewayService) resolveCacheTTLRequestRewriteTarget(ctx context.Context, account *Account, apiKey *APIKey) (string, bool) {
-	target, ok, _ := s.resolveCacheTTLUsageOverride(ctx, account, apiKey)
-	return target, ok
+	if !accountEnforcesCacheTTLRequestRewrite(account) {
+		return "", false
+	}
+	if apiKey != nil {
+		if t, applied := apiKey.CacheStrategyTTLTarget(); applied {
+			return t, true
+		}
+	}
+	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
+		return cacheTTLTarget1h, true
+	}
+	return "", false
 }
+
+// accountEnforcesCacheTTLRequestRewrite 报告 Forward 主链是否会对该账号的请求体做 TTL 改写。
+// 透传、Bedrock、Vertex 等路径不改写请求体，用户级偏好在这些账号上不能按承诺生效。
+func accountEnforcesCacheTTLRequestRewrite(account *Account) bool {
+	return account != nil && account.IsAnthropicOAuthOrSetupToken()
+}
+
+// cachePolicyTraceMaxLen 与 usage_logs.cache_policy_trace 列宽（migrations/144）一致。
+const cachePolicyTraceMaxLen = 64
 
 // apiKeyFromGinContext 从 gin.Context 中取出 *APIKey。
 // 使用字符串常量 "api_key"（与 middleware.ContextKeyAPIKey 同值）避免循环导入。

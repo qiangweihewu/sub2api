@@ -808,6 +808,10 @@ func (s *GatewayService) recordUsageCore(ctx context.Context, input *recordUsage
 			cachePolicyTrace = it
 		}
 	}
+	// usage_logs.cache_policy_trace 是 VARCHAR(64)，超长会让整条 usage 写入失败。
+	if len(cachePolicyTrace) > cachePolicyTraceMaxLen {
+		cachePolicyTrace = cachePolicyTrace[:cachePolicyTraceMaxLen]
+	}
 
 	multiplier, imageMultiplier, pricingAt := s.recordUsageMultipliers(ctx, apiKey, user, input.PricingAt)
 	billingModel := s.recordUsageBillingModel(ctx, apiKey, result, input.ChannelUsageFields)

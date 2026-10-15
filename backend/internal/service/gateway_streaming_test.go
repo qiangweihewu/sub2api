@@ -423,7 +423,10 @@ func TestHandleStreamingResponse_SSEErrorEvent_ReturnsTypedErrorWithRawData(t *t
 	_ = pr.Close()
 
 	require.Error(t, err)
-	require.Nil(t, result)
+	// 出错时带回已观测 usage（此处尚无任何帧，故为空）；是否入账由 Forward 按"是否已输出"决定，
+	// 未输出时 Forward 仍返回 nil result（见 TestGatewayService_Forward_PreOutputSSEErrorKeepsNilResult）。
+	require.NotNil(t, result)
+	require.False(t, result.usage.hasObservedTokens())
 
 	// typed error 必须可被 errors.As 匹配，RawData 必须保留上游 dataLine 原文
 	var sseErr *sseStreamErrorEventError

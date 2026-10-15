@@ -331,11 +331,11 @@ export default {
       auto: 'Auto (recommended)',
       autoDesc: 'Follow account / platform defaults',
       costPriority: 'Cost priority',
-      costPriorityDesc: 'Force 5-minute cache — best for short sessions and high hit-rate prompts',
-      hint: 'Controls how cache TTL is handled for requests on this key. Only applies when scheduled to Anthropic-platform accounts (OAuth / Setup Token / API Key / Bedrock / Vertex); silently ignored on other platforms.',
+      costPriorityDesc: 'Use 5-minute cache — best for short sessions and high hit-rate prompts',
+      hint: 'Controls the cache TTL for requests on this key. On Claude OAuth / Setup Token accounts the selected TTL is enforced and billed; other accounts (API Key / Bedrock / Vertex, etc.) are not rewritten and are billed by the TTL the upstream actually used; ignored on non-Anthropic platforms.',
       label: 'Cache strategy',
       latencyPriority: 'Latency priority',
-      latencyPriorityDesc: 'Force 1-hour cache — better for long sessions or heavy prompt reuse (1h cache creation costs ~2× the 5m price)'
+      latencyPriorityDesc: 'Use 1-hour cache — better for long sessions or heavy prompt reuse (1h cache writes cost ~1.6× the 5m price)'
     }
   },
 

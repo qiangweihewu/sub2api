@@ -396,8 +396,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		logger.LegacyPrintf("service.gateway", "Model mapping applied: %s -> %s (account: %s, source=%s)", originalModel, mappedModel, account.Name, mappingSource)
 	}
 
-	if s.shouldInjectAnthropicCacheTTL1h(ctx, account) {
-		if err := replaceBody(injectAnthropicCacheControlTTL1h(body)); err != nil {
+	if ttlTarget, ok := s.resolveCacheTTLRequestRewriteTarget(ctx, account, apiKeyFromGinContext(c)); ok {
+		if err := replaceBody(forceEphemeralCacheControlTTL(body, ttlTarget)); err != nil {
 			return nil, err
 		}
 	}
@@ -1041,11 +1041,19 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					truncateString(sseErr.RawData, 1000),
 				)
 
-				return nil, &UpstreamFailoverError{
+				failoverErr := &UpstreamFailoverError{
 					StatusCode:      semanticStatus,
 					ResponseBody:    body,
 					ResponseHeaders: resp.Header.Clone(),
 				}
+				// 尚未输出：result 恒为 nil，handler 可安全切号重试且不会重复计费。
+				// 已输出：handler 不会切号，只终止流；带回已观测 usage 供其入账。
+				if c.Writer.Size() != writerSizeBeforeStream {
+					if partial := partialStreamUsageResult(c, resp, streamResult, originalModel, mappedModel, startTime, nil); partial != nil {
+						return partial, failoverErr
+					}
+				}
+				return nil, failoverErr
 			}
 			// 流中断（缺失 terminal 事件、读错误、数据间隔超时等）时保留已观测到的
 			// usage 与错误一起返回，handler 在错误处理完成后照常提交 usage 记录。
