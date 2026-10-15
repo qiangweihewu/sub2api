@@ -111,6 +111,8 @@ var reviewedDenyExact = map[string]struct{}{
 	"PUT /api/v1/admin/accounts/opencode-go-usage/settings":         {},
 	"GET /api/v1/admin/accounts/:id/grok-media-eligibility":         {},
 	"PUT /api/v1/admin/accounts/:id/grok-media-eligibility":         {},
+	"GET /api/v1/admin/accounts/:id/claude/reset-credits":           {},
+	"POST /api/v1/admin/accounts/:id/claude/reset-credits/redeem":   {},
 	"POST /api/v1/admin/accounts/:id/recover-state":                 {},
 	"POST /api/v1/admin/accounts/:id/refresh":                       {},
 	"POST /api/v1/admin/accounts/:id/refresh-tier":                  {},
@@ -250,6 +252,7 @@ func newFullAdminRouter() *gin.Engine {
 		servermiddleware.JWTAuthMiddleware(noop),
 		servermiddleware.AdminAuthMiddleware(noop),
 		servermiddleware.AuditLogMiddleware(noop),
+		nil,
 		nil,
 		nil,
 	)
@@ -429,7 +432,7 @@ func newAdminRouterWithRole(role string) *gin.Engine {
 		servermiddleware.JWTAuthMiddleware(noop),
 		servermiddleware.AdminAuthMiddleware(setRole),
 		servermiddleware.AuditLogMiddleware(noop),
-		nil, nil,
+		nil, nil, nil,
 	)
 	return router
 }
