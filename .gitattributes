@@ -20,3 +20,6 @@ backend/migrations/*.sql text eol=lf
 
 # Dockerfile
 Dockerfile text eol=lf
+
+# SSE fixture event delimiters require a trailing blank line.
+backend/internal/service/testdata/claude-wire-contract-v1/*.sse text eol=lf whitespace=-blank-at-eof

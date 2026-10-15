@@ -33,7 +33,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 				validationModel = resolved
 			}
 		} else if account.Type == AccountTypeAPIKey {
-			validationModel = account.GetMappedModel(validationModel)
+			validationModel = account.GetMappedModelForUpstream(ctx, validationModel)
 		}
 	}
 	if account != nil && account.Platform == PlatformAnthropic {
@@ -467,6 +467,18 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 	if c != nil && c.Request != nil {
 		clientBeta = getHeaderRaw(c.Request.Header, "anthropic-beta")
 	}
+	if _, enabled := GetUpstreamPolicyFromContext(ctx); enabled && !ShouldForwardBetaFlags(ctx) {
+		clientHeaders := http.Header{}
+		if c != nil && c.Request != nil {
+			clientHeaders = c.Request.Header
+		}
+		model := gjson.GetBytes(body, "model").String()
+		policy := s.evaluateBetaPolicy(ctx, clientBeta, account, model)
+		if policy.blockErr != nil {
+			return nil, policy.blockErr
+		}
+		clientBeta, _ = s.computeFinalAnthropicBeta("apikey", false, model, clientHeaders, body, mergeDropSets(policy.filterSet))
+	}
 	// 账号覆写了 anthropic-beta 时，覆写值即最终上游值：净化以覆写值为准
 	if beta, ok := account.HeaderOverrideValue("anthropic-beta"); ok {
 		clientBeta = beta
@@ -483,7 +495,7 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 	if c != nil && c.Request != nil {
 		for key, values := range c.Request.Header {
 			lowerKey := strings.ToLower(strings.TrimSpace(key))
-			if !ShouldCopyClientHeader(ctx, lowerKey, func(k string) bool { return allowedHeaders[k] }) {
+			if !shouldCopyClientRequestHeader(ctx, lowerKey, c.Request.Header, func(k string) bool { return allowedHeaders[k] }) {
 				continue
 			}
 			wireKey := resolveWireCasing(key)
@@ -493,6 +505,13 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 		}
 
 		ForwardUserNetworkInfoHeaders(ctx, req.Header, c.Request.Header)
+	}
+
+	if _, enabled := GetUpstreamPolicyFromContext(ctx); enabled {
+		deleteHeaderAllForms(req.Header, "anthropic-beta")
+		if clientBeta != "" {
+			setHeaderRaw(req.Header, "anthropic-beta", clientBeta)
+		}
 	}
 
 	req.Header.Del("authorization")

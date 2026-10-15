@@ -43,27 +43,81 @@ func TestSanitizeToolName_DynamicTakesPrecedence(t *testing.T) {
 	require.Equal(t, "analyze_ses00", got, "dynamic mapping wins over static prefix")
 }
 
-func TestRestoreToolNamesInBytes_LongestFirst(t *testing.T) {
-	// 当假名 "abc_12" 是另一个更长假名的子串（真实场景极少但算法必须防御）时，
-	// 长的必须先替换。本测试用显式构造的映射来验证排序不变量。
+func TestRestoreToolNamesInBytes_ExactStructuredFieldMatching(t *testing.T) {
+	// A shorter fake name that prefixes a longer one must never rewrite a
+	// substring in another name or arbitrary tool input.
 	rw := &ToolNameRewrite{
 		Forward: map[string]string{"foo": "abc_12", "bar": "abc_12_ext"},
 		Reverse: map[string]string{"abc_12": "foo", "abc_12_ext": "bar"},
 	}
-	// 手工构造 ReverseOrdered：长的在前
+	// Keep the legacy ordered map populated; exact field matching does not use it.
 	rw.ReverseOrdered = [][2]string{
 		{"abc_12_ext", "bar"},
 		{"abc_12", "foo"},
 	}
-	data := []byte(`{"tool":"abc_12_ext","other":"abc_12"}`)
+	data := []byte(`{"content":[{"type":"tool_use","name":"abc_12_ext","input":{"name":"abc_12"}}]}`)
 	restored := string(restoreToolNamesInBytes(data, rw))
-	require.Equal(t, `{"tool":"bar","other":"foo"}`, restored)
+	require.Equal(t, `{"content":[{"type":"tool_use","name":"bar","input":{"name":"abc_12"}}]}`, restored)
 }
 
 func TestRestoreToolNamesInBytes_StaticPrefixRollback(t *testing.T) {
-	data := []byte(`{"name":"sessions_list","id":"cc_ses_xyz"}`)
-	got := string(restoreToolNamesInBytes(data, nil))
-	require.Equal(t, `{"name":"sessions_list","id":"session_xyz"}`, got)
+	data := []byte(`{"content":[{"type":"tool_use","name":"cc_sess_list","input":{"name":"cc_sess_list"}}]}`)
+	got := string(restoreToolNamesInBytes(data, &ToolNameRewrite{Reverse: map[string]string{"cc_sess_list": "sessions_list"}}))
+	require.Equal(t, `{"content":[{"type":"tool_use","name":"sessions_list","input":{"name":"cc_sess_list"}}]}`, got)
+	require.Equal(t, string(data), string(restoreToolNamesInBytes(data, nil)), "without the request mapping, even static-looking names are legitimate names")
+	require.Equal(t, string(data), string(restoreToolNamesInBytes(data, &ToolNameRewrite{Reverse: map[string]string{"cc_sess_other": "sessions_other"}})), "an absent exact key must not be guessed from a prefix")
+}
+
+func TestApplyToolNameRewriteToBody_RenamesToolReferenceWithinToolResult(t *testing.T) {
+	body := []byte(`{
+		"tools":[{"name":"sessions_list","input_schema":{}}],
+		"tool_choice":{"type":"tool","name":"sessions_list"},
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"tu_1","name":"sessions_list","input":{"query":"cc_sess_list must stay untouched"}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"tu_1","content":[
+					{"type":"tool_reference","tool_name":"sessions_list","text":"sessions_list remains prose"},
+					{"type":"tool_search_tool_result","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"sessions_list"}]}}
+				]}
+			]}
+		]
+	}`)
+	rw := buildToolNameRewriteFromBody(body)
+	out := applyToolNameRewriteToBody(body, rw)
+	require.Equal(t, "cc_sess_list", gjson.GetBytes(out, "tools.0.name").String())
+	require.Equal(t, "cc_sess_list", gjson.GetBytes(out, "tool_choice.name").String())
+	require.Equal(t, "cc_sess_list", gjson.GetBytes(out, "messages.0.content.0.name").String())
+	require.Equal(t, "cc_sess_list", gjson.GetBytes(out, "messages.1.content.0.content.0.tool_name").String())
+	require.Equal(t, "sessions_list remains prose", gjson.GetBytes(out, "messages.1.content.0.content.0.text").String())
+	require.Equal(t, "cc_sess_list", gjson.GetBytes(out, "messages.1.content.0.content.1.content.tool_references.0.tool_name").String())
+
+	response := []byte(`{
+		"content":[
+			{"type":"tool_use","name":"cc_sess_list","input":{"query":"cc_sess_list"}},
+			{"type":"tool_result","content":[{"type":"tool_reference","tool_name":"cc_sess_list","text":"cc_sess_list"}]},
+			{"type":"tool_search_tool_result","content":{"type":"tool_search_tool_search_result","tool_references":[{"type":"tool_reference","tool_name":"cc_sess_list"}]}}
+		]
+	}`)
+	got := restoreToolNamesInBytes(response, rw)
+	require.Equal(t, "sessions_list", gjson.GetBytes(got, "content.0.name").String())
+	require.Equal(t, "cc_sess_list", gjson.GetBytes(got, "content.0.input.query").String())
+	require.Equal(t, "sessions_list", gjson.GetBytes(got, "content.1.content.0.tool_name").String())
+	require.Equal(t, "cc_sess_list", gjson.GetBytes(got, "content.1.content.0.text").String())
+	require.Equal(t, "sessions_list", gjson.GetBytes(got, "content.2.content.tool_references.0.tool_name").String())
+}
+
+func TestRestoreToolNamesInBytes_SSEPayloadOnlyAndEscapedNames(t *testing.T) {
+	rw := &ToolNameRewrite{Reverse: map[string]string{`fake_"name`: `real_"name`}}
+	data := []byte(`event: content_block_start
+data: {"type":"content_block_start","content_block":{"type":"tool_use","name":"fake_\"name","input":{"note":"fake_\"name"}}}
+
+`)
+	got := string(restoreToolNamesInBytes(data, rw))
+	require.Contains(t, got, `"name":"real_\"name"`)
+	require.Contains(t, got, `"note":"fake_\"name"`)
+	require.Contains(t, got, "event: content_block_start\n")
 }
 
 func TestApplyToolNameRewriteToBody_RenamesToolsAndToolChoice(t *testing.T) {
@@ -276,7 +330,7 @@ func TestBuildToolNameRewriteFromBody_ReverseOrderedByLengthDesc(t *testing.T) {
 }
 
 func TestRestoreToolNamesInBytes_NoMapping_NoStaticMatch_IsNoop(t *testing.T) {
-	data := []byte("plain text without any tool names")
+	data := []byte(`{"content":[{"type":"tool_use","name":"cc_sess_export"}]}`)
 	require.Equal(t, string(data), string(restoreToolNamesInBytes(data, nil)))
 }
 

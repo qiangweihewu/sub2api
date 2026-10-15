@@ -83,6 +83,9 @@ var partiallyAllowedModuleRoots = []string{
 //
 // 本表长是特性不是缺陷。
 var reviewedDenyExact = map[string]struct{}{
+	// Read-only operation, but exposes effective routing configuration; keep
+	// the existing full-admin-only configuration boundary explicit.
+	"GET /api/v1/admin/accounts/:id/upstream-policy": {},
 	// ---- accounts（51 条）----
 	// 上游账号：写操作 / 凭据导出导入 / 触发上游调用
 	"POST /api/v1/admin/accounts": {},

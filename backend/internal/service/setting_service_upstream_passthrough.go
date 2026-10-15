@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync/atomic"
@@ -204,6 +205,23 @@ func (s *SettingService) IsUpstreamPolicyV1Enabled(ctx context.Context) bool {
 		return false
 	}
 	return raw == "true"
+}
+
+// ReadUpstreamPolicyV1Gate is the diagnostic counterpart to the runtime boolean
+// getter. It distinguishes a missing setting row (the documented disabled
+// default) from a repository failure, without changing runtime behavior.
+func (s *SettingService) ReadUpstreamPolicyV1Gate(ctx context.Context) (enabled bool, available bool) {
+	if s == nil || s.settingRepo == nil {
+		return false, false
+	}
+	raw, err := s.settingRepo.GetValue(ctx, SettingKeyUpstreamPolicyV1Enabled)
+	if errors.Is(err, ErrSettingNotFound) {
+		return false, true
+	}
+	if err != nil {
+		return false, false
+	}
+	return raw == "true", true
 }
 
 // SetUpstreamPolicyV1Enabled persists the FeatureFlag that gates Phase B

@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropicdiag"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/tidwall/gjson"
@@ -429,7 +430,7 @@ func (s *GatewayService) handleErrorResponse(ctx context.Context, resp *http.Res
 		}
 	}
 	if shouldDisable {
-		return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: body, QuotaExhausted: IsQuotaExhaustedMessage(upstreamMsg)}
+		return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: body, ResponseHeaders: resp.Header.Clone(), QuotaExhausted: IsQuotaExhaustedMessage(upstreamMsg)}
 	}
 
 	MarkResponseCommitted(c)
@@ -749,6 +750,13 @@ func (s *GatewayService) handleStreamingResponse(ctx context.Context, resp *http
 			return nil, s.failoverOnInfraLevel2xx(ctx, c, account, resp, body, false, "[Anthropic OAuth Stream]")
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	if anthropicdiag.Enabled() {
+		diagnostics := anthropicdiag.New(startTime)
+		resp.Body = diagnostics.Wrap(resp.Body)
+		defer func() {
+			logger.LegacyPrintf("service.gateway", "[ClaudeDiagnostics] path=oauth account_id=%d %s", account.ID, diagnostics.Finalize().LogValue())
+		}()
 	}
 
 	if s.responseHeaderFilter != nil {

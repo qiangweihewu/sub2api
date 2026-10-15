@@ -70,6 +70,7 @@ IMPORTANT: You must NEVER generate or guess URLs for the user unless you are con
 	postUsageBillingTimeout                = 15 * time.Second
 	claudeCodeNoopDeltaKeepaliveMinVersion = "2.1.193"
 	debugGatewayBodyEnv                    = "SUB2API_DEBUG_GATEWAY_BODY"
+	debugGatewayRawBodyEnv                 = "SUB2API_DEBUG_GATEWAY_RAW_BODY"
 	// 上游错误体只需要提取错误 JSON/日志摘要，默认 512KiB 避免错误风暴叠加大请求体。
 	gatewayUpstreamErrorBodyReadLimit int64 = 512 << 10
 )
@@ -279,63 +280,13 @@ func shortSessionHash(sessionHash string) string {
 	return sessionHash[:8]
 }
 
-func redactAuthHeaderValue(v string) string {
-	v = strings.TrimSpace(v)
-	if v == "" {
-		return ""
-	}
-	// Keep scheme for debugging, redact secret.
-	if strings.HasPrefix(strings.ToLower(v), "bearer ") {
-		return "Bearer [redacted]"
-	}
-	return "[redacted]"
-}
-
-func safeHeaderValueForLog(key string, v string) string {
-	key = strings.ToLower(strings.TrimSpace(key))
-	switch key {
-	case "authorization", "x-api-key":
-		return redactAuthHeaderValue(v)
-	default:
-		return strings.TrimSpace(v)
-	}
-}
-
-func extractSystemPreviewFromBody(body []byte) string {
-	if len(body) == 0 {
-		return ""
-	}
-	sys := gjson.GetBytes(body, "system")
-	if !sys.Exists() {
-		return ""
-	}
-
-	switch {
-	case sys.IsArray():
-		for _, item := range sys.Array() {
-			if !item.IsObject() {
-				continue
-			}
-			if strings.EqualFold(item.Get("type").String(), "text") {
-				if t := item.Get("text").String(); strings.TrimSpace(t) != "" {
-					return t
-				}
-			}
-		}
-		return ""
-	case sys.Type == gjson.String:
-		return sys.String()
-	default:
-		return ""
-	}
-}
-
 func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account, tokenType string, mimicClaudeCode bool) string {
 	if req == nil {
 		return ""
 	}
 
-	// Only log a minimal fingerprint to avoid leaking user content.
+	// Log fixed labels and structural properties only. This line is also attached
+	// to OAuth credential-scope errors, independently of gateway body capture.
 	interesting := []string{
 		"user-agent",
 		"x-app",
@@ -359,39 +310,67 @@ func buildClaudeMimicDebugLine(req *http.Request, body []byte, account *Account,
 
 	h := make([]string, 0, len(interesting))
 	for _, k := range interesting {
-		if v := req.Header.Get(k); v != "" {
-			h = append(h, fmt.Sprintf("%s=%q", k, safeHeaderValueForLog(k, v)))
+		for headerName := range req.Header {
+			if strings.EqualFold(headerName, k) {
+				h = append(h, k+"=present")
+				break
+			}
 		}
 	}
 
-	metaUserID := strings.TrimSpace(gjson.GetBytes(body, "metadata.user_id").String())
-	sysPreview := strings.TrimSpace(extractSystemPreviewFromBody(body))
-
-	// Truncate preview to keep logs sane.
-	if len(sysPreview) > 300 {
-		sysPreview = sysPreview[:300] + "..."
+	metadata := gjson.GetBytes(body, "metadata")
+	metadataUserID := gjson.GetBytes(body, "metadata.user_id")
+	system := gjson.GetBytes(body, "system")
+	metadataPresent := metadata.Exists()
+	metadataUserIDPresent := metadataUserID.Exists()
+	systemPresent := system.Exists()
+	tokenTypeLabel := "other"
+	switch tokenType {
+	case "oauth", "apikey":
+		tokenTypeLabel = tokenType
 	}
-	sysPreview = strings.ReplaceAll(sysPreview, "\n", "\\n")
-	sysPreview = strings.ReplaceAll(sysPreview, "\r", "\\r")
 
 	aid := int64(0)
-	aname := ""
 	if account != nil {
 		aid = account.ID
-		aname = account.Name
 	}
 
 	return fmt.Sprintf(
-		"url=%s account=%d(%s) tokenType=%s mimic=%t meta.user_id=%q system.preview=%q headers={%s}",
-		req.URL.String(),
+		"account=%d tokenType=%s mimic=%t metadata.present=%t metadata.type=%s metadata.bytes=%d metadata.user_id.present=%t metadata.user_id.type=%s metadata.user_id.bytes=%d system.present=%t system.type=%s system.bytes=%d headers={%s}",
 		aid,
-		aname,
-		tokenType,
+		tokenTypeLabel,
 		mimicClaudeCode,
-		metaUserID,
-		sysPreview,
+		metadataPresent,
+		jsonTypeLabel(metadata),
+		len(metadata.Raw),
+		metadataUserIDPresent,
+		jsonTypeLabel(metadataUserID),
+		len(metadataUserID.Raw),
+		systemPresent,
+		jsonTypeLabel(system),
+		len(system.Raw),
 		strings.Join(h, " "),
 	)
+}
+
+func jsonTypeLabel(value gjson.Result) string {
+	if !value.Exists() {
+		return "absent"
+	}
+	switch {
+	case value.IsObject():
+		return "object"
+	case value.IsArray():
+		return "array"
+	case value.Type == gjson.String:
+		return "string"
+	case value.Type == gjson.Number:
+		return "number"
+	case value.Type == gjson.True || value.Type == gjson.False:
+		return "boolean"
+	default:
+		return "null"
+	}
 }
 
 func logClaudeMimicDebug(req *http.Request, body []byte, account *Account, tokenType string, mimicClaudeCode bool) {
@@ -679,6 +658,10 @@ type ForwardResult struct {
 	// UpstreamModel is the actual upstream model after mapping.
 	// Prefer empty when it is identical to Model; persistence normalizes equal values away as no-op mappings.
 	UpstreamModel string
+	// PricingFallbackModel preserves the configured account price fallback when
+	// an opted-in transparent policy sends an otherwise unpriced alias verbatim.
+	// It never changes the model sent upstream or persisted as UpstreamModel.
+	PricingFallbackModel string
 	// UpstreamResponseModel is captured from the raw successful upstream
 	// response before any client-facing rewrite or protocol conversion.
 	UpstreamResponseModel         string
@@ -870,7 +853,7 @@ type GatewayService struct {
 	channelService        *ChannelService
 	resolver              *ModelPricingResolver
 	compositeResolver     *CompositeRouteResolver
-	debugGatewayBodyFile  atomic.Pointer[os.File] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
+	debugGatewayBodyFile  atomic.Pointer[gatewayDebugCapture] // non-nil when SUB2API_DEBUG_GATEWAY_BODY is set
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
 
@@ -2570,6 +2553,7 @@ func (s *GatewayService) handleVertexUpstreamErrors(
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
+				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
 			}
 		}
@@ -2594,6 +2578,7 @@ func (s *GatewayService) handleVertexUpstreamErrors(
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           respBody,
+			ResponseHeaders:        resp.Header.Clone(),
 			RetryableOnSameAccount: account.IsPoolMode() && isPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
@@ -3544,82 +3529,89 @@ func (s *GatewayService) initDebugGatewayBodyFile(path string) {
 		path = debugGatewayBodyDefaultFilename
 	}
 
-	// 如果 path 指向一个已存在的目录，自动追加默认文件名
-	if info, err := os.Stat(path); err == nil && info.IsDir() { //nolint:gosec // G703: path 仅来自启动环境变量 SUB2API_DEBUG_GATEWAY_BODY（运维配置），非请求输入
-		path = filepath.Join(path, debugGatewayBodyDefaultFilename)
+	// Resolve an existing directory path without accepting symlink targets.
+	if info, err := os.Lstat(path); err == nil { //nolint:gosec // G703: path comes only from operator startup configuration
+		if info.Mode()&os.ModeSymlink != 0 {
+			slog.Error("refusing symlink gateway debug log target", "path", path)
+			return
+		}
+		if info.IsDir() { //nolint:gosec // G703: path is an operator startup setting, not request input
+			path = filepath.Join(path, debugGatewayBodyDefaultFilename)
+		} else if !info.Mode().IsRegular() {
+			slog.Error("refusing non-regular gateway debug log target", "path", path)
+			return
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		slog.Error("failed to inspect gateway debug log path", "path", path, "error", err)
+		return
 	}
 
-	// 确保父目录存在
+	// Newly created parent directories are private. Existing directories are left
+	// untouched; tightening an operator-owned directory would be surprising.
 	if dir := filepath.Dir(path); dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil { //nolint:gosec // G703: 同上
+		if err := os.MkdirAll(dir, 0700); err != nil { //nolint:gosec // G703: 同上
 			slog.Error("failed to create gateway debug log directory", "dir", dir, "error", err)
 			return
 		}
 	}
+	if info, err := os.Lstat(path); err == nil { //nolint:gosec // G703: path comes only from operator startup configuration
+		if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+			slog.Error("refusing non-regular gateway debug log target", "path", path)
+			return
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		slog.Error("failed to inspect gateway debug log file", "path", path, "error", err)
+		return
+	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644) //nolint:gosec // G703: 同上
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600) //nolint:gosec // G703: path is an operator startup setting, not request input
 	if err != nil {
 		slog.Error("failed to open gateway debug log file", "path", path, "error", err)
 		return
 	}
-	s.debugGatewayBodyFile.Store(f)
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = f.Close()
+		slog.Error("refusing non-regular gateway debug log target", "path", path, "error", err)
+		return
+	}
+	pathInfo, pathErr := os.Lstat(path) //nolint:gosec // G703: path comes only from operator startup configuration
+	if pathErr != nil || !pathInfo.Mode().IsRegular() || !os.SameFile(info, pathInfo) {
+		_ = f.Close()
+		slog.Error("refusing changed or non-regular gateway debug log target", "path", path, "error", pathErr)
+		return
+	}
+	if err := f.Chmod(0600); err != nil {
+		_ = f.Close()
+		slog.Error("failed to secure gateway debug log file", "path", path, "error", err)
+		return
+	}
+	capture, err := newGatewayDebugCapture(f, parseDebugEnvBool(os.Getenv(debugGatewayRawBodyEnv)))
+	if err != nil {
+		_ = f.Close()
+		slog.Error("failed to initialize gateway debug capture", "path", path, "error", err)
+		return
+	}
+	s.debugGatewayBodyFile.Store(capture)
 	slog.Info("gateway debug logging enabled", "path", path)
 }
 
-// debugLogGatewaySnapshot 将网关请求的完整快照（headers + body）写入独立的调试日志文件，
-// 用于对比客户端原始请求和上游转发请求。
+// debugLogGatewaySnapshot 默认只写入结构摘要。原始请求可能含 prompts、工具内容、
+// metadata 和凭据；仅设置独立的 SUB2API_DEBUG_GATEWAY_RAW_BODY=true 才会捕获原文。
+// 捕获写入器最多保留 8 MiB、运行 1 小时、每条最多 64 KiB；关闭后文件仍保留，
+// 需由运维人员在排查完成后按需删除。
 //
 // 启用方式（环境变量）：
 //
 //	SUB2API_DEBUG_GATEWAY_BODY=1                          # 写入 gateway_debug.log
 //	SUB2API_DEBUG_GATEWAY_BODY=/tmp/gateway_debug.log     # 写入指定路径
+//	SUB2API_DEBUG_GATEWAY_RAW_BODY=true                   # 高敏感原文捕获，需显式开启
 //
 // tag: "CLIENT_ORIGINAL" 或 "UPSTREAM_FORWARD"
 func (s *GatewayService) debugLogGatewaySnapshot(tag string, headers http.Header, body []byte, extra map[string]string) {
-	f := s.debugGatewayBodyFile.Load()
-	if f == nil {
+	capture := s.debugGatewayBodyFile.Load()
+	if capture == nil {
 		return
 	}
-
-	var buf strings.Builder
-	ts := time.Now().Format("2006-01-02 15:04:05.000")
-	fmt.Fprintf(&buf, "\n========== [%s] %s ==========\n", ts, tag)
-
-	// 1. context
-	if len(extra) > 0 {
-		fmt.Fprint(&buf, "--- context ---\n")
-		extraKeys := make([]string, 0, len(extra))
-		for k := range extra {
-			extraKeys = append(extraKeys, k)
-		}
-		sort.Strings(extraKeys)
-		for _, k := range extraKeys {
-			fmt.Fprintf(&buf, "  %s: %s\n", k, extra[k])
-		}
-	}
-
-	// 2. headers（按真实 Claude CLI wire 顺序排列，便于与抓包对比；auth 脱敏）
-	fmt.Fprint(&buf, "--- headers ---\n")
-	for _, k := range sortHeadersByWireOrder(headers) {
-		for _, v := range headers[k] {
-			fmt.Fprintf(&buf, "  %s: %s\n", k, safeHeaderValueForLog(k, v))
-		}
-	}
-
-	// 3. body（完整输出，格式化 JSON 便于 diff）
-	fmt.Fprint(&buf, "--- body ---\n")
-	if len(body) == 0 {
-		fmt.Fprint(&buf, "  (empty)\n")
-	} else {
-		var pretty bytes.Buffer
-		if json.Indent(&pretty, body, "  ", "  ") == nil {
-			fmt.Fprintf(&buf, "  %s\n", pretty.Bytes())
-		} else {
-			// JSON 格式化失败时原样输出
-			fmt.Fprintf(&buf, "  %s\n", body)
-		}
-	}
-
-	// 写入文件（调试用，并发写入可能交错但不影响可读性）
-	_, _ = f.WriteString(buf.String())
+	capture.write(tag, headers, body, extra)
 }

@@ -959,7 +959,7 @@ func (s *GatewayService) recordUsageBillingModel(ctx context.Context, apiKey *AP
 	}
 	// 通用兜底（与 OpenAI 路径的 usageBillingModelCandidates 语义对齐）：
 	// 选定模型查不到任何价格时回退到实际转发的具体模型。已定价流量不受影响。
-	return s.billableModelWithFallback(ctx, apiKey, billingModel, result.UpstreamModel, result.Model)
+	return s.billableModelWithFallback(ctx, apiKey, billingModel, result.UpstreamModel, result.Model, result.PricingFallbackModel)
 }
 
 // cacheStoragePrice 返回计费模型的显式缓存存储单价；计费模型未配置时依次回退到实际转发模型与请求模型。
@@ -967,7 +967,7 @@ func (s *GatewayService) cacheStoragePrice(result *ForwardResult, billingModel s
 	if s.billingService == nil {
 		return 0
 	}
-	for _, model := range []string{billingModel, result.UpstreamModel, result.Model} {
+	for _, model := range []string{billingModel, result.UpstreamModel, result.Model, result.PricingFallbackModel} {
 		if strings.TrimSpace(model) == "" {
 			continue
 		}

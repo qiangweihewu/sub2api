@@ -2068,6 +2068,7 @@ func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *se
 
 	// 配额耗尽时返回 503 + 友好文案，避免客户端看到 400 误以为是自身请求错误
 	if failoverErr.QuotaExhausted {
+		copyAnthropicFailoverRetryAfter(c, failoverErr.ResponseHeaders, failoverErr.StatusCode, http.StatusServiceUnavailable, streamStarted)
 		h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "overloaded_error",
 			"All upstream accounts are temporarily exhausted, please retry later", streamStarted)
 		return
@@ -2075,7 +2076,20 @@ func (h *GatewayHandler) handleFailoverExhausted(c *gin.Context, failoverErr *se
 
 	// 使用默认的错误映射（Bedrock 区域池全部耗尽时，把 429 软化为可重试的 503 overloaded）
 	status, errType, errMsg := h.mapUpstreamError(softenBedrockExhaustStatus(statusCode, failoverErr.SoftRateLimitOnExhaust))
+	copyAnthropicFailoverRetryAfter(c, failoverErr.ResponseHeaders, failoverErr.StatusCode, status, streamStarted)
 	h.handleStreamingAwareError(c, status, errType, errMsg, streamStarted)
+}
+
+// copyAnthropicFailoverRetryAfter forwards only a validated retry hint for a
+// final retryable client status. Error passthrough rules choose their own
+// response semantics and intentionally do not call this helper.
+func copyAnthropicFailoverRetryAfter(c *gin.Context, headers http.Header, upstreamStatus, responseStatus int, streamStarted bool) {
+	if c == nil || streamStarted || c.Writer == nil || c.Writer.Written() ||
+		(upstreamStatus != http.StatusTooManyRequests && upstreamStatus < http.StatusInternalServerError) ||
+		(responseStatus != http.StatusTooManyRequests && responseStatus != http.StatusBadGateway && responseStatus != http.StatusServiceUnavailable) {
+		return
+	}
+	copyFailoverRetryAfter(c, headers)
 }
 
 // handleFailoverExhaustedSimple 简化版本，用于没有响应体的情况

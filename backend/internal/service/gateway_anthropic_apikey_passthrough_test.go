@@ -292,7 +292,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardStreamPreservesBodyAnd
 	require.Empty(t, rec.Header().Get("Set-Cookie"), "响应头应经过安全过滤")
 }
 
-func TestGatewayService_AnthropicAPIKeyPassthrough_PolicyTransparentDoesNotOverrideLegacyField(t *testing.T) {
+func TestGatewayService_AnthropicAPIKeyPassthrough_ResolvedTransparentPolicyOverridesLegacyField(t *testing.T) {
 	account := &Account{
 		Platform: PlatformAnthropic,
 		Type:     AccountTypeAPIKey,
@@ -301,14 +301,11 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_PolicyTransparentDoesNotOverr
 	policy := EffectiveUpstreamPolicy{ProfileApplied: ProfileTransparent}
 	ctx := SetUpstreamPolicyInContext(context.Background(), &policy)
 
-	require.False(t, account.IsAnthropicAPIKeyPassthroughEnabledWithContext(ctx),
-		"policy runtime is disabled; only extra.anthropic_passthrough=true may enable passthrough")
+	require.True(t, account.IsAnthropicAPIKeyPassthroughEnabledWithContext(ctx),
+		"explicitly resolved transparent policy enables the passthrough path")
 }
 
-func TestGatewayService_AnthropicAPIKeyPassthrough_LegacyFieldBeatsPolicyProtected(t *testing.T) {
-	// Regression guard: v0.1.152 honored account extra.anthropic_passthrough=true.
-	// Policy defaults must not silently move such accounts onto the non-passthrough
-	// request builder.
+func TestGatewayService_AnthropicAPIKeyPassthrough_ResolvedProtectedPolicyOverridesLegacyField(t *testing.T) {
 	account := &Account{
 		Platform: PlatformAnthropic,
 		Type:     AccountTypeAPIKey,
@@ -317,8 +314,8 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_LegacyFieldBeatsPolicyProtect
 	policy := EffectiveUpstreamPolicy{ProfileApplied: ProfileProtected}
 	ctx := SetUpstreamPolicyInContext(context.Background(), &policy)
 
-	require.True(t, account.IsAnthropicAPIKeyPassthroughEnabledWithContext(ctx),
-		"legacy anthropic_passthrough=true must keep routing to passthrough")
+	require.False(t, account.IsAnthropicAPIKeyPassthroughEnabledWithContext(ctx),
+		"explicitly resolved protected policy uses the protected builder")
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardCountTokensPreservesBody(t *testing.T) {
@@ -1390,6 +1387,72 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_StreamingHTML20
 	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "upstream_invalid_response")
 	require.Empty(t, rec.Body.String(), "streaming upstream HTML 2xx must not be forwarded as SSE")
+}
+
+type anthropicFailoverHeadersRepo struct{ AccountRepository }
+
+func (*anthropicFailoverHeadersRepo) SetRateLimited(context.Context, int64, time.Time) error {
+	return nil
+}
+
+func (*anthropicFailoverHeadersRepo) SetOverloaded(context.Context, int64, time.Time) error {
+	return nil
+}
+
+func (*anthropicFailoverHeadersRepo) SetError(context.Context, int64, string) error {
+	return nil
+}
+
+func TestGatewayService_AnthropicHTTPFailoverPreservesResponseHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	for _, tc := range []struct {
+		name        string
+		status      int
+		passthrough bool
+	}{
+		{name: "native 429", status: http.StatusTooManyRequests},
+		{name: "native 503", status: http.StatusServiceUnavailable},
+		{name: "API-key passthrough 429", status: http.StatusTooManyRequests, passthrough: true},
+		{name: "API-key passthrough 503", status: http.StatusServiceUnavailable, passthrough: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+			body := []byte(`{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hello"}]}`)
+			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+			require.NoError(t, err)
+
+			retryAfter := "37"
+			upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
+				StatusCode: tc.status,
+				Header: http.Header{
+					"Retry-After":  []string{retryAfter},
+					"X-Request-Id": []string{"rid-failover-header"},
+					"Content-Type": []string{"application/json"},
+				},
+				Body: io.NopCloser(strings.NewReader(`{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`)),
+			}}
+			svc := &GatewayService{
+				cfg:              &config.Config{},
+				httpUpstream:     upstream,
+				rateLimitService: &RateLimitService{accountRepo: &anthropicFailoverHeadersRepo{}},
+			}
+			account := newAnthropicAPIKeyAccountForTest()
+			account.Extra["anthropic_passthrough"] = tc.passthrough
+			account.Credentials["custom_error_codes_enabled"] = true
+			account.Credentials["custom_error_codes"] = []any{float64(tc.status)}
+
+			result, err := svc.Forward(context.Background(), c, account, parsed)
+			require.Error(t, err)
+			require.Nil(t, result)
+			var failoverErr *UpstreamFailoverError
+			require.ErrorAs(t, err, &failoverErr)
+			require.Equal(t, tc.status, failoverErr.StatusCode)
+			require.Equal(t, retryAfter, failoverErr.ResponseHeaders.Get("Retry-After"))
+			require.Equal(t, "rid-failover-header", failoverErr.ResponseHeaders.Get("X-Request-Id"))
+		})
+	}
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_ForwardDirect_InvalidTokenType(t *testing.T) {

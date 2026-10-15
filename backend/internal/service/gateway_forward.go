@@ -108,7 +108,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				validationModel = resolved
 			}
 		} else if account.Type == AccountTypeAPIKey {
-			validationModel = account.GetMappedModel(validationModel)
+			validationModel = account.GetMappedModelForUpstream(ctx, validationModel)
 		}
 	}
 	if account != nil && account.Platform == PlatformAnthropic {
@@ -122,12 +122,21 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	// partial-stream results all use the same billing and usage-log path.
 	defer func() {
 		if result != nil {
+			if account != nil && ShouldSkipModelRewrite(ctx) {
+				result.PricingFallbackModel = account.GetMappedModel(parsed.Model)
+			}
 			if tier := anthropicSpeedServiceTier(account, parsed.Speed, anthropicSpeedModel(parsed, result)); tier != nil {
 				result.ServiceTier = tier
 			}
 		}
 	}()
 	beginUpstreamResponseModelObservation(c)
+	if c != nil && c.Request != nil {
+		s.debugLogGatewaySnapshot("CLIENT_ORIGINAL", c.Request.Header, parsed.Body.Bytes(), map[string]string{
+			"model":  parsed.Model,
+			"stream": strconv.FormatBool(parsed.Stream),
+		})
+	}
 
 	// Web Search 模拟：纯 web_search 请求时，直接调用搜索 API 构造响应
 	if account != nil && s.shouldEmulateWebSearch(ctx, account, parsed.GroupID, parsed.Body.Bytes()) {
@@ -231,16 +240,6 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	reqModel := parsed.Model
 	reqStream := parsed.Stream
 	originalModel := reqModel
-
-	// === DEBUG: 打印客户端原始请求（headers + body 摘要）===
-	if c != nil {
-		s.debugLogGatewaySnapshot("CLIENT_ORIGINAL", c.Request.Header, body, map[string]string{
-			"account":      fmt.Sprintf("%d(%s)", account.ID, account.Name),
-			"account_type": string(account.Type),
-			"model":        reqModel,
-			"stream":       strconv.FormatBool(reqStream),
-		})
-	}
 
 	// Claude Code 客户端判定：UA 匹配 claude-cli/* 且携带 metadata.user_id。
 	// 真正的 Claude Code 客户端自带完整的 system prompt、cache_control 断点和 header，
@@ -843,6 +842,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
+				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 			}
 		}
@@ -879,6 +879,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           respBody,
+			ResponseHeaders:        resp.Header.Clone(),
 			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
@@ -915,8 +916,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					// 复用 google config error 的退避策略（[1,5,15,30,60]m 指数退避）。
 					tempUnscheduleGoogleConfigError(ctx, s.rateLimitService, s.accountRepo, account.ID, "[forward]")
 					return nil, &UpstreamFailoverError{
-						StatusCode:   resp.StatusCode,
-						ResponseBody: respBody,
+						StatusCode:      resp.StatusCode,
+						ResponseBody:    respBody,
+						ResponseHeaders: resp.Header.Clone(),
 					}
 				}
 			}
@@ -965,7 +967,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 					logger.LegacyPrintf("service.gateway", "Account %d: 400 error, attempting failover", account.ID)
 				}
 				s.handleFailoverSideEffects(ctx, resp, account, reqModel)
-				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody, QuotaExhausted: isQuotaExhaustedOn400(respBody)}
+				return nil, &UpstreamFailoverError{StatusCode: resp.StatusCode, ResponseBody: respBody, ResponseHeaders: resp.Header.Clone(), QuotaExhausted: isQuotaExhaustedOn400(respBody)}
 			}
 		}
 		return s.handleErrorResponse(ctx, resp, c, account, reqModel)
@@ -1040,8 +1042,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 				)
 
 				return nil, &UpstreamFailoverError{
-					StatusCode:   semanticStatus,
-					ResponseBody: body,
+					StatusCode:      semanticStatus,
+					ResponseBody:    body,
+					ResponseHeaders: resp.Header.Clone(),
 				}
 			}
 			// 流中断（缺失 terminal 事件、读错误、数据间隔超时等）时保留已观测到的
@@ -1193,6 +1196,10 @@ func (s *GatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context,
 		return false
 	}
 	upstreamModel := resolveAccountUpstreamModel(account, requestedModel)
+	policyContext := ResolveAndStorePolicy(ctx, account, s.settingService)
+	if ShouldSkipModelRewrite(policyContext) {
+		upstreamModel = requestedModel
+	}
 	if upstreamModel == "" {
 		return false
 	}

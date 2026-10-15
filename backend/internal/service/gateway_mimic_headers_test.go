@@ -95,10 +95,15 @@ func TestApplyClaudeCodeMimicHeaders_PartialCacheFillsOnlyGaps(t *testing.T) {
 	require.Equal(t, claude.DefaultHeaders()["X-Stainless-Runtime-Version"], getHeaderRaw(req.Header, "X-Stainless-Runtime-Version"))
 }
 
-// The upstream passthrough policy runtime is disabled, so ForwardClientUA must
-// never override the Claude Code mimic UA.
+// The API-key policy rollout excludes OAuth, so ForwardClientUA must never
+// override the Claude Code mimic UA on this path.
 func TestForwardClientUA_DoesNotOverrideMimicUAOnOAuthPath(t *testing.T) {
+	t.Setenv(upstreamPolicyRuntimeEnv, "true")
+	settings := newPolicyRuntimeSettings(t, true)
 	applyOverride := func(req *http.Request, clientHeaders http.Header, ctx context.Context) {
+		// Production resolves the selected account before building its request.
+		// The API-key rollout must discard any prior attempt's policy on OAuth.
+		ctx = ResolveAndStorePolicy(ctx, &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}, settings)
 		applyClaudeCodeMimicHeaders(req, true, claude.DefaultUserAgent())
 		if ShouldForwardClientUA(ctx) {
 			if clientUA := strings.TrimSpace(clientHeaders.Get("User-Agent")); clientUA != "" {

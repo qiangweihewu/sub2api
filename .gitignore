@@ -1,6 +1,7 @@
 # 本地杂项文档、测试数据和外部项目副本
 /docs-local/
 .codex
+/.impeccable/hook.cache.json
 
 # ===================
 # Go 后端
@@ -134,6 +135,7 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/claude-gateway-diagnostics.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md

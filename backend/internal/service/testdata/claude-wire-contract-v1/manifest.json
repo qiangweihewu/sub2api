@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "source_kind": "synthetic",
+  "fixtures": [
+    {
+      "fixture_id": "unicode-tool-structure-transparent",
+      "client_family": "generic_anthropic",
+      "modeled_version": "synthetic generic Anthropic client shape v1",
+      "modeled_version_is_empirical": false,
+      "input_file": "unicode-tool-structure.request.json",
+      "expected_files": {"transparent": "unicode-tool-structure.transparent.json"},
+      "beta_header": "prompt-caching-2024-07-31,context-management-2025-06-27"
+    },
+    {
+      "fixture_id": "cache-beta-protected",
+      "client_family": "synthetic_claude_cli",
+      "modeled_version": "synthetic Claude CLI shape v1",
+      "modeled_version_is_empirical": false,
+      "input_file": "cache-beta.request.json",
+      "expected_files": {"protected": "cache-beta.protected.json"},
+      "beta_header": "prompt-caching-2024-07-31,context-management-2025-06-27"
+    },
+    {
+      "fixture_id": "cache-missing-beta-protected",
+      "client_family": "synthetic_claude_cli",
+      "modeled_version": "synthetic Claude CLI shape v1",
+      "modeled_version_is_empirical": false,
+      "input_file": "cache-beta.request.json",
+      "expected_files": {"protected": "cache-missing-beta.protected.json"},
+      "beta_header": ""
+    }
+  ],
+  "streams": [
+    {"fixture_id": "complete-stream", "input_file": "complete.sse", "expected_file": "complete.sse"},
+    {"fixture_id": "truncated-stream", "input_file": "truncated.sse", "expected_file": "truncated.sse"}
+  ]
+}

@@ -239,7 +239,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	if tokenType != "oauth" || !mimicClaudeCode {
 		for key, values := range clientHeaders {
 			lowerKey := strings.ToLower(key)
-			if !ShouldCopyClientHeader(ctx, lowerKey, func(k string) bool { return allowedHeaders[k] }) {
+			if !shouldCopyClientRequestHeader(ctx, lowerKey, clientHeaders, func(k string) bool { return allowedHeaders[k] }) {
 				continue
 			}
 			wireKey := resolveWireCasing(key)

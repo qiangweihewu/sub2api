@@ -1,0 +1,1 @@
+{"model":"claude-sonnet-4-6","stream":false,"system":[{"type":"text","text":"Synthetic cache boundary sample; no customer content.","cache_control":{"type":"ephemeral","ttl":"5m"}}],"messages":[{"role":"user","content":[{"type":"text","text":"Synthetic request."}]}]}

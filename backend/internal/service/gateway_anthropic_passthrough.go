@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/anthropicdiag"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/tidwall/gjson"
@@ -217,6 +218,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 			return nil, &UpstreamFailoverError{
 				StatusCode:             resp.StatusCode,
 				ResponseBody:           respBody,
+				ResponseHeaders:        resp.Header.Clone(),
 				RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 			}
 		}
@@ -253,6 +255,7 @@ func (s *GatewayService) forwardAnthropicAPIKeyPassthroughWithInput(
 		return nil, &UpstreamFailoverError{
 			StatusCode:             resp.StatusCode,
 			ResponseBody:           respBody,
+			ResponseHeaders:        resp.Header.Clone(),
 			RetryableOnSameAccount: account.IsPoolMode() && account.IsPoolModeRetryableStatus(resp.StatusCode),
 		}
 	}
@@ -340,6 +343,18 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	if c != nil && c.Request != nil {
 		clientBeta = getHeaderRaw(c.Request.Header, "anthropic-beta")
 	}
+	if _, enabled := GetUpstreamPolicyFromContext(ctx); enabled && !ShouldForwardBetaFlags(ctx) {
+		clientHeaders := http.Header{}
+		if c != nil && c.Request != nil {
+			clientHeaders = c.Request.Header
+		}
+		model := gjson.GetBytes(body, "model").String()
+		policy := s.evaluateBetaPolicy(ctx, clientBeta, account, model)
+		if policy.blockErr != nil {
+			return nil, nil, policy.blockErr
+		}
+		clientBeta, _ = s.computeFinalAnthropicBeta("apikey", false, model, clientHeaders, body, mergeDropSets(policy.filterSet))
+	}
 	// 账号覆写了 anthropic-beta 时，覆写值即最终上游值：净化以覆写值为准
 	if beta, ok := account.HeaderOverrideValue("anthropic-beta"); ok {
 		clientBeta = beta
@@ -360,7 +375,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	if c != nil && c.Request != nil {
 		for key, values := range c.Request.Header {
 			lowerKey := strings.ToLower(strings.TrimSpace(key))
-			if !ShouldCopyClientHeader(ctx, lowerKey, func(k string) bool { return allowedHeaders[k] }) {
+			if !shouldCopyClientRequestHeader(ctx, lowerKey, c.Request.Header, func(k string) bool { return allowedHeaders[k] }) {
 				continue
 			}
 			wireKey := resolveWireCasing(key)
@@ -370,6 +385,13 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 		}
 
 		ForwardUserNetworkInfoHeaders(ctx, req.Header, c.Request.Header)
+	}
+
+	if _, enabled := GetUpstreamPolicyFromContext(ctx); enabled {
+		deleteHeaderAllForms(req.Header, "anthropic-beta")
+		if clientBeta != "" {
+			setHeaderRaw(req.Header, "anthropic-beta", clientBeta)
+		}
 	}
 
 	// 覆盖入站鉴权残留，并注入上游认证
@@ -398,6 +420,7 @@ func (s *GatewayService) buildUpstreamRequestAnthropicAPIKeyPassthrough(
 	// 账号级请求头覆写（最终生效，覆盖上面所有来源的同名头）
 	account.ApplyHeaderOverrides(req.Header)
 	filterSonnet55ToolsetBetaHeader(req.Header, body, gjson.GetBytes(body, "model").String())
+	s.debugLogGatewaySnapshot("UPSTREAM_FORWARD", req.Header, body, nil)
 
 	return req, body, nil
 }
@@ -430,6 +453,13 @@ func (s *GatewayService) handleStreamingResponseAnthropicAPIKeyPassthrough(
 		// 不是 HTML/空，但也不是标准 SSE：把读出来的字节塞回去让下游继续走
 		// 现有路径（最终大概率因为找不到 SSE 终止事件而报错），保留原有行为。
 		resp.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	if anthropicdiag.Enabled() {
+		diagnostics := anthropicdiag.New(startTime)
+		resp.Body = diagnostics.Wrap(resp.Body)
+		defer func() {
+			logger.LegacyPrintf("service.gateway", "[ClaudeDiagnostics] path=apikey_passthrough account_id=%d %s", account.ID, diagnostics.Finalize().LogValue())
+		}()
 	}
 
 	writeAnthropicPassthroughResponseHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)

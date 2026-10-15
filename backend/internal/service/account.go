@@ -2438,13 +2438,15 @@ func (a *Account) IsAnthropicAPIKeyPassthroughEnabled() bool {
 	return ok && enabled
 }
 
-// IsAnthropicAPIKeyPassthroughEnabledWithContext preserves upstream/main
-// behavior while the upstream passthrough policy runtime is disabled: only the
-// legacy account extra.anthropic_passthrough field decides passthrough.
+// An explicitly resolved API-key policy chooses the request path. Without a
+// policy the legacy account flag remains authoritative.
 func (a *Account) IsAnthropicAPIKeyPassthroughEnabledWithContext(ctx context.Context) bool {
-	_ = ctx
 	if a == nil || a.Platform != PlatformAnthropic || a.Type != AccountTypeAPIKey {
 		return false
+	}
+	if policy, ok := GetUpstreamPolicyFromContext(ctx); ok {
+		return policy.ProfileApplied == ProfileTransparent ||
+			(a.IsAnthropicAPIKeyPassthroughEnabled() && policy.SkipBodyScrub && policy.ForwardBetaFlags)
 	}
 	return a.IsAnthropicAPIKeyPassthroughEnabled()
 }

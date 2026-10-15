@@ -33,6 +33,26 @@ func ResolveUpstreamPassthroughPolicyWithGroup(
 	defaults *UpstreamPassthroughDefaults,
 	globalOverride GlobalOverrideMode,
 ) EffectiveUpstreamPolicy {
+	policy, _ := resolveUpstreamPassthroughPolicy(account, group, defaults, globalOverride, nil)
+	return policy
+}
+
+func resolveUpstreamPassthroughPolicyWithGroupTrace(
+	account *Account,
+	group *Group,
+	defaults *UpstreamPassthroughDefaults,
+	globalOverride GlobalOverrideMode,
+) (EffectiveUpstreamPolicy, map[string]string) {
+	return resolveUpstreamPassthroughPolicy(account, group, defaults, globalOverride, make(map[string]string, 7))
+}
+
+func resolveUpstreamPassthroughPolicy(
+	account *Account,
+	group *Group,
+	defaults *UpstreamPassthroughDefaults,
+	globalOverride GlobalOverrideMode,
+	sources map[string]string,
+) (EffectiveUpstreamPolicy, map[string]string) {
 	policy := EffectiveUpstreamPolicy{}
 
 	// Step 1: kill switch short-circuits everything
@@ -43,7 +63,12 @@ func ResolveUpstreamPassthroughPolicyWithGroup(
 		policy.Category = DeriveUpstreamCategory(account) // still record for logs
 		policy.GlobalOverrideActive = true
 		fillSignals(&policy, account)
-		return policy
+		if sources != nil {
+			for _, key := range upstreamPassthroughToggleKeys {
+				sources[key] = "global_override"
+			}
+		}
+		return policy, sources
 	}
 
 	// Step 2: derive (or read override) category
@@ -70,24 +95,67 @@ func ResolveUpstreamPassthroughPolicyWithGroup(
 			Overrides: nil,
 		}
 	}
+	profileSource := "category_default"
+	if acctProfile != "" {
+		profileSource = "account_profile"
+	} else if groupProfile != "" {
+		profileSource = "group_profile"
+	}
+	if sources != nil {
+		for _, key := range upstreamPassthroughToggleKeys {
+			sources[key] = profileSource
+		}
+	}
 
 	// Step 5: start from profile toggles
 	toggles := ProfileToggleValues(categorySlot.Profile)
 
 	// Step 6: layer the system-default per-toggle overrides (these are sparse)
 	toggles.Apply(categorySlot.Overrides)
+	if sources != nil {
+		for key := range categorySlot.Overrides {
+			if _, ok := sources[key]; ok {
+				sources[key] = "system_override"
+			}
+		}
+	}
 
 	// Step 7: layer the account's sparse per-toggle overrides (highest non-kill-switch precedence)
 	accountOverrides := getAccountOverrides(account)
 	toggles.Apply(accountOverrides)
+	if sources != nil {
+		for key := range accountOverrides {
+			if _, ok := sources[key]; ok {
+				sources[key] = "account_override"
+			}
+		}
+	}
 
 	// Step 8: legacy fallback ONLY if no new fields contributed
-	applyLegacyFallback(&toggles, account, acctProfile, accountOverrides, categorySlot.Overrides)
+	if groupProfile == "" {
+		legacyBefore := legacyPassthroughEnabled(account)
+		applyLegacyFallback(&toggles, account, acctProfile, accountOverrides, categorySlot.Overrides)
+		if sources != nil && legacyBefore && acctProfile == "" && len(accountOverrides) == 0 && len(categorySlot.Overrides) == 0 {
+			sources[ToggleForwardClientHeaders] = "legacy"
+			sources[ToggleForwardBetaFlags] = "legacy"
+			sources[ToggleSkipBodyScrub] = "legacy"
+		}
+	}
 
 	fillFromToggles(&policy, toggles)
 	policy.ProfileApplied = categorySlot.Profile
 	fillSignals(&policy, account)
-	return policy
+	return policy, sources
+}
+
+var upstreamPassthroughToggleKeys = []string{
+	ToggleForwardClientHeaders,
+	ToggleForwardUserNetworkInfo,
+	ToggleSkipBodyScrub,
+	ToggleSkipSystemPromptInject,
+	ToggleForwardClientUA,
+	ToggleForwardBetaFlags,
+	ToggleSkipModelRewrite,
 }
 
 func getAccountProfile(a *Account) PassthroughProfile {
@@ -159,6 +227,18 @@ func applyLegacyFallback(
 	t.ForwardClientHeaders = true
 	t.ForwardBetaFlags = true
 	t.SkipBodyScrub = true
+}
+
+func legacyPassthroughEnabled(a *Account) bool {
+	if a == nil || a.Extra == nil {
+		return false
+	}
+	for _, key := range []string{"anthropic_passthrough", "openai_passthrough"} {
+		if enabled, ok := a.Extra[key].(bool); ok && enabled {
+			return true
+		}
+	}
+	return false
 }
 
 // fillFromToggles copies a PassthroughToggles into the corresponding fields of
