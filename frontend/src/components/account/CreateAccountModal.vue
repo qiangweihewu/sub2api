@@ -2838,7 +2838,13 @@
       </div>
 
       <!-- Temp Unschedulable Rules -->
-      <div class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4">
+      <div
+        ref="tempUnschedSection"
+        role="group"
+        :aria-label="t('admin.accounts.tempUnschedulable.title')"
+        tabindex="-1"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600 space-y-4"
+      >
         <div class="mb-3 flex items-center justify-between">
           <div>
             <label class="input-label mb-0">{{ t('admin.accounts.tempUnschedulable.title') }}</label>
@@ -5139,6 +5145,7 @@ watch(vertexAuthMode, () => {
 })
 const tempUnschedEnabled = ref(false)
 const tempUnschedRules = ref<TempUnschedRuleForm[]>([])
+const tempUnschedSection = ref<HTMLElement | null>(null)
 const getModelMappingKey = createStableObjectKeyResolver<ModelMapping>('create-model-mapping')
 const getOpenAICompactModelMappingKey = createStableObjectKeyResolver<ModelMapping>('create-openai-compact-model-mapping')
 const getAntigravityModelMappingKey = createStableObjectKeyResolver<ModelMapping>('create-antigravity-model-mapping')
@@ -6339,6 +6346,12 @@ const handleSubmit = async () => {
   if (isOAuthFlow.value) {
     if (!isGrokSSOInputMethod.value && !form.name.trim()) {
       appStore.showError(t('admin.accounts.pleaseEnterAccountName'))
+      return
+    }
+    // Validate while these controls are visible, before starting either OAuth method.
+    if (!applyTempUnschedConfig({})) {
+      tempUnschedSection.value?.scrollIntoView({ block: 'center' })
+      tempUnschedSection.value?.focus({ preventScroll: true })
       return
     }
     const canContinue = await ensureAntigravityMixedChannelConfirmed(async () => {

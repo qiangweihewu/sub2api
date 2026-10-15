@@ -12,6 +12,7 @@ const {
   probeUpstreamBillingMock,
   syncUpstreamModelsMock,
   showWarningMock,
+  showErrorMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
   authIsSimpleMode,
@@ -20,6 +21,7 @@ const {
   probeUpstreamBillingMock: vi.fn(),
   syncUpstreamModelsMock: vi.fn(),
   showWarningMock: vi.fn(),
+  showErrorMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
   authIsSimpleMode: { value: true },
@@ -27,7 +29,7 @@ const {
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
+    showError: showErrorMock,
     showSuccess: vi.fn(),
     showWarning: showWarningMock,
   }),
@@ -138,8 +140,9 @@ const ModelWhitelistSelectorStub = defineComponent({
   >models</button>`,
 })
 
-function mountModal(groups: any[] = []) {
+function mountModal(groups: any[] = [], attachTo?: HTMLElement) {
   return mount(CreateAccountModal, {
+    attachTo,
     props: { show: true, proxies: [], groups },
     global: {
       stubs: {
@@ -198,6 +201,100 @@ async function openCodexImportStep(toggleClicks = 0) {
   await wrapper.get('form#create-account-form').trigger('submit.prevent')
   return wrapper
 }
+
+describe('CreateAccountModal OAuth temporary-unschedulable preflight', () => {
+  let wrapper: ReturnType<typeof mountModal>
+
+  beforeEach(async () => {
+    authIsSimpleMode.value = true
+    showErrorMock.mockReset()
+    createAccountMock.mockReset()
+    wrapper = mountModal([], document.body)
+    await wrapper.get('form#create-account-form input[type="text"]').setValue('Claude account')
+  })
+
+  afterEach(() => wrapper.unmount())
+
+  const getRulesSection = () => {
+    const label = wrapper.findAll('label').find(
+      (candidate) => candidate.text() === 'admin.accounts.tempUnschedulable.title'
+    )!
+    return label.element.parentElement!.parentElement!.parentElement!
+  }
+
+  const toggleRules = async () => {
+    getRulesSection().querySelector('button')!.click()
+    await flushPromises()
+  }
+
+  const next = async () => {
+    await wrapper.get('form#create-account-form').trigger('submit.prevent')
+    await flushPromises()
+  }
+
+  it('allows OAuth authorization when optional cooldown rules are disabled', async () => {
+    await next()
+
+    expect(wrapper.find('form#create-account-form').exists()).toBe(false)
+    expect(showErrorMock).not.toHaveBeenCalled()
+  })
+
+  it('stays on basic info and focuses the rules before either authorization method when enabled without rules', async () => {
+    await toggleRules()
+    const section = getRulesSection()
+    section.scrollIntoView = vi.fn()
+    await next()
+
+    expect(wrapper.find('form#create-account-form').exists()).toBe(true)
+    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.tempUnschedulable.rulesInvalid')
+    expect(section.scrollIntoView).toHaveBeenCalledWith({ block: 'center' })
+    expect(document.activeElement).toBe(section)
+    expect(createAccountMock).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['errorCodePlaceholder', ''],
+    ['keywordsPlaceholder', '   '],
+    ['durationPlaceholder', '0'],
+  ])('rejects a rule with invalid %s before leaving basic info', async (field, value) => {
+    await toggleRules()
+    await selectButtonByText(wrapper, 'admin.accounts.tempUnschedulable.presets.overloadLabel')
+    await wrapper.get(`input[placeholder="admin.accounts.tempUnschedulable.${field}"]`).setValue(value)
+    getRulesSection().scrollIntoView = vi.fn()
+    await next()
+
+    expect(wrapper.find('form#create-account-form').exists()).toBe(true)
+    expect(showErrorMock).toHaveBeenCalledWith('admin.accounts.tempUnschedulable.rulesInvalid')
+  })
+
+  it('allows authorization after completing a previously empty enabled rule list', async () => {
+    await toggleRules()
+    getRulesSection().scrollIntoView = vi.fn()
+    await next()
+    expect(wrapper.find('form#create-account-form').exists()).toBe(true)
+
+    await selectButtonByText(wrapper, 'admin.accounts.tempUnschedulable.presets.overloadLabel')
+    showErrorMock.mockClear()
+    await next()
+
+    expect(wrapper.find('form#create-account-form').exists()).toBe(false)
+    expect(showErrorMock).not.toHaveBeenCalled()
+  })
+
+  it('allows authorization after disabling an invalid optional rule configuration', async () => {
+    await toggleRules()
+    getRulesSection().scrollIntoView = vi.fn()
+    await next()
+    expect(wrapper.find('form#create-account-form').exists()).toBe(true)
+
+    await toggleRules()
+    showErrorMock.mockClear()
+    await next()
+
+    expect(wrapper.find('form#create-account-form').exists()).toBe(false)
+    expect(showErrorMock).not.toHaveBeenCalled()
+  })
+})
 
 describe('CreateAccountModal OpenAI long-context billing', () => {
   beforeEach(() => {
