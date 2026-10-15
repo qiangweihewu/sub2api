@@ -2590,9 +2590,8 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_SessionStickyEscapeByEr
 		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{acquireResults: map[int64]bool{21202: true}}),
 		openaiAccountStats: newOpenAIAccountRuntimeStats(),
 	}
-	for i := 0; i < 3; i++ {
-		svc.openaiAccountStats.report(21201, false, nil)
-	}
+	// errorAlpha=0.4（463dc53f2）：1 次失败后错误率 0.4，仍低于 0.5 阈值，保持粘性。
+	svc.openaiAccountStats.report(21201, false, nil)
 	selection, decision, err := svc.SelectAccountWithScheduler(ctx, &groupID, "", "session_hash_sticky_error_rate", "gpt-5.1", nil, OpenAIUpstreamTransportAny, false)
 	require.NoError(t, err)
 	require.NotNil(t, selection)
@@ -2956,7 +2955,7 @@ func TestDefaultOpenAIAccountScheduler_ShouldEscapeStickyAccount_ThresholdBounda
 	})
 	require.False(t, shouldEscape)
 	require.Empty(t, reason)
-	require.InDelta(t, 0.16, errorRate, 1e-9)
+	require.InDelta(t, 0.24, errorRate, 1e-9) // errorAlpha=0.4: 0 → 0.4 → 0.24
 	require.InDelta(t, 15000, observedTTFT, 1e-9)
 
 	for i := 0; i < 4; i++ {
@@ -2976,7 +2975,7 @@ func TestDefaultOpenAIAccountScheduler_ShouldEscapeStickyAccount_ThresholdBounda
 	})
 	require.False(t, shouldEscape)
 	require.Empty(t, reason)
-	require.InDelta(t, 0.655936, errorRate, 1e-9)
+	require.InDelta(t, 0.901504, errorRate, 1e-9)
 	require.InDelta(t, 15000, observedTTFT, 1e-9)
 }
 
@@ -3421,7 +3420,7 @@ func TestOpenAIAccountRuntimeStats_ReportAndSnapshot(t *testing.T) {
 
 	errorRate, ttft, hasTTFT := stats.snapshot(1001)
 	require.True(t, hasTTFT)
-	require.InDelta(t, 0.36, errorRate, 1e-9)
+	require.InDelta(t, 0.64, errorRate, 1e-9) // errorAlpha=0.4: 0 → 0.4 → 0.64
 	require.InDelta(t, 120.0, ttft, 1e-9)
 	require.Equal(t, 1, stats.size())
 }
@@ -3740,7 +3739,7 @@ func TestOpenAIGatewayService_SchedulerWrappersAndDefaults(t *testing.T) {
 	require.Equal(t, openaiStickySessionTTL, svc.openAIWSSessionStickyTTL())
 
 	defaultWeights := svc.openAIWSSchedulerWeights()
-	require.Equal(t, 1.0, defaultWeights.Priority)
+	require.Equal(t, 1.5, defaultWeights.Priority)
 	require.Equal(t, 1.0, defaultWeights.Load)
 	require.Equal(t, 0.7, defaultWeights.Queue)
 	require.Equal(t, 0.8, defaultWeights.ErrorRate)
