@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"time"
 
@@ -218,17 +219,41 @@ func (s *adminServiceImpl) TestProxy(ctx context.Context, id int64) (*ProxyTestR
 		return nil, err
 	}
 
+	if s.proxyProber == nil {
+		return &ProxyTestResult{
+			Status:     "unknown",
+			ReasonCode: ProxyQualityReasonProbeUnavailable,
+			Message:    "代理探测服务未配置",
+		}, nil
+	}
 	proxyURL := proxy.URL()
 	exitInfo, latencyMs, err := s.proxyProber.ProbeProxy(ctx, proxyURL)
 	if err != nil {
+		if reasonCode, unknown := proxyProbeUnknownForContext(ctx.Err(), err); unknown {
+			return &ProxyTestResult{
+				Success:    false,
+				Status:     "unknown",
+				ReasonCode: reasonCode,
+				Message:    "代理出口探测结果不可判定",
+			}, nil
+		}
 		s.saveProxyLatency(ctx, id, &ProxyLatencyInfo{
 			Success:   false,
-			Message:   err.Error(),
+			Message:   "代理出口探测失败",
 			UpdatedAt: time.Now(),
 		})
 		return &ProxyTestResult{
-			Success: false,
-			Message: err.Error(),
+			Success:    false,
+			Status:     "failed",
+			ReasonCode: ProxyQualityReasonProbeFailed,
+			Message:    "代理出口探测失败",
+		}, nil
+	}
+	if exitInfo == nil || net.ParseIP(exitInfo.IP) == nil {
+		return &ProxyTestResult{
+			Status:     "unknown",
+			ReasonCode: ProxyQualityReasonInvalidProbeResponse,
+			Message:    "代理出口探测返回了无效响应",
 		}, nil
 	}
 
@@ -246,6 +271,7 @@ func (s *adminServiceImpl) TestProxy(ctx context.Context, id int64) (*ProxyTestR
 	})
 	return &ProxyTestResult{
 		Success:     true,
+		Status:      "success",
 		Message:     "Proxy is accessible",
 		LatencyMs:   latencyMs,
 		IPAddress:   exitInfo.IP,
@@ -264,20 +290,15 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 
 	result := &ProxyQualityCheckResult{
 		ProxyID:   id,
-		Score:     100,
-		Grade:     "A",
 		CheckedAt: time.Now().Unix(),
 		Items:     make([]ProxyQualityCheckItem, 0, len(proxyQualityTargets)+1),
 	}
 
 	proxyURL := proxy.URL()
 	if s.proxyProber == nil {
-		result.Items = append(result.Items, ProxyQualityCheckItem{
-			Target:  "base_connectivity",
-			Status:  "fail",
-			Message: "代理探测服务未配置",
-		})
-		result.FailedCount++
+		result.Items = append(result.Items, proxyQualityUnknownItem("base_connectivity", ProxyQualityReasonProbeUnavailable, "代理探测服务未配置"))
+		result.UnknownCount++
+		appendProxyQualityUnexecutedTargets(result, ProxyQualityReasonProbeUnavailable)
 		finalizeProxyQualityResult(result)
 		s.saveProxyQualitySnapshot(ctx, id, result, nil)
 		return result, nil
@@ -285,13 +306,41 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 
 	exitInfo, latencyMs, err := s.proxyProber.ProbeProxy(ctx, proxyURL)
 	if err != nil {
-		result.Items = append(result.Items, ProxyQualityCheckItem{
-			Target:    "base_connectivity",
-			Status:    "fail",
-			LatencyMs: latencyMs,
-			Message:   err.Error(),
-		})
-		result.FailedCount++
+		if ctx.Err() != nil {
+			item := proxyQualityUnknownItem("base_connectivity", ProxyQualityReasonProbeCanceled, "代理出口探测已取消")
+			item.LatencyMs = latencyMs
+			result.Items = append(result.Items, item)
+			result.UnknownCount++
+		} else {
+			reasonCode, message, unknown := proxyQualitySafeProbeError(err)
+			item := ProxyQualityCheckItem{
+				Target:         "base_connectivity",
+				Status:         "fail",
+				EvidenceSource: ProxyEvidenceObserved,
+				ReasonCode:     reasonCode,
+				LatencyMs:      latencyMs,
+				Message:        message,
+			}
+			if unknown {
+				item.Status = "unknown"
+				item.EvidenceSource = ProxyEvidenceUnavailable
+				result.UnknownCount++
+			} else {
+				result.FailedCount++
+			}
+			result.Items = append(result.Items, item)
+		}
+		appendProxyQualityUnexecutedTargets(result, ProxyQualityReasonProbeUnavailable)
+		finalizeProxyQualityResult(result)
+		s.saveProxyQualitySnapshot(ctx, id, result, nil)
+		return result, nil
+	}
+	if exitInfo == nil || net.ParseIP(exitInfo.IP) == nil {
+		item := proxyQualityUnknownItem("base_connectivity", ProxyQualityReasonInvalidProbeResponse, "代理出口探测返回了无效响应")
+		item.LatencyMs = latencyMs
+		result.Items = append(result.Items, item)
+		result.UnknownCount++
+		appendProxyQualityUnexecutedTargets(result, ProxyQualityReasonInvalidProbeResponse)
 		finalizeProxyQualityResult(result)
 		s.saveProxyQualitySnapshot(ctx, id, result, nil)
 		return result, nil
@@ -302,10 +351,11 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 	result.CountryCode = exitInfo.CountryCode
 	result.BaseLatencyMs = latencyMs
 	result.Items = append(result.Items, ProxyQualityCheckItem{
-		Target:    "base_connectivity",
-		Status:    "pass",
-		LatencyMs: latencyMs,
-		Message:   "代理出口连通正常",
+		Target:         "base_connectivity",
+		Status:         "pass",
+		EvidenceSource: ProxyEvidenceObserved,
+		LatencyMs:      latencyMs,
+		Message:        "代理出口连通正常",
 	})
 	result.PassedCount++
 
@@ -315,12 +365,9 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 		ResponseHeaderTimeout: proxyQualityResponseHeaderTimeout,
 	})
 	if err != nil {
-		result.Items = append(result.Items, ProxyQualityCheckItem{
-			Target:  "http_client",
-			Status:  "fail",
-			Message: fmt.Sprintf("创建检测客户端失败: %v", err),
-		})
-		result.FailedCount++
+		result.Items = append(result.Items, proxyQualityUnknownItem("http_client", ProxyQualityReasonProbeUnavailable, "无法创建检测客户端"))
+		result.UnknownCount++
+		appendProxyQualityUnexecutedTargets(result, ProxyQualityReasonProbeUnavailable)
 		finalizeProxyQualityResult(result)
 		s.saveProxyQualitySnapshot(ctx, id, result, exitInfo)
 		return result, nil
@@ -336,6 +383,10 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 			result.WarnCount++
 		case "challenge":
 			result.ChallengeCount++
+		case "unknown":
+			result.UnknownCount++
+		case "not_applicable":
+			result.NotApplicableCount++
 		default:
 			result.FailedCount++
 		}
@@ -346,6 +397,16 @@ func (s *adminServiceImpl) CheckProxyQuality(ctx context.Context, id int64) (*Pr
 	return result, nil
 }
 
+func appendProxyQualityUnexecutedTargets(result *ProxyQualityCheckResult, reasonCode string) {
+	if result == nil {
+		return
+	}
+	for _, target := range proxyQualityTargets {
+		result.Items = append(result.Items, proxyQualityUnknownItem(target.Target, reasonCode, "检测未执行，结果未知"))
+		result.UnknownCount++
+	}
+}
+
 func runProxyQualityTarget(ctx context.Context, client *http.Client, target proxyQualityTarget) ProxyQualityCheckItem {
 	item := ProxyQualityCheckItem{
 		Target: target.Target,
@@ -353,9 +414,7 @@ func runProxyQualityTarget(ctx context.Context, client *http.Client, target prox
 
 	req, err := http.NewRequestWithContext(ctx, target.Method, target.URL, nil)
 	if err != nil {
-		item.Status = "fail"
-		item.Message = fmt.Sprintf("构建请求失败: %v", err)
-		return item
+		return proxyQualityUnknownItem(target.Target, ProxyQualityReasonRequestBuildFailed, "构建检测请求失败")
 	}
 	req.Header.Set("Accept", "application/json,text/html,*/*")
 	req.Header.Set("User-Agent", proxyQualityClientUserAgent)
@@ -363,9 +422,16 @@ func runProxyQualityTarget(ctx context.Context, client *http.Client, target prox
 	start := time.Now()
 	resp, err := client.Do(req)
 	if err != nil {
-		item.Status = "fail"
 		item.LatencyMs = time.Since(start).Milliseconds()
-		item.Message = fmt.Sprintf("请求失败: %v", err)
+		if ctx.Err() != nil {
+			item = proxyQualityUnknownItem(target.Target, ProxyQualityReasonRequestCanceled, "检测请求已取消")
+			item.LatencyMs = time.Since(start).Milliseconds()
+			return item
+		}
+		item.Status = "fail"
+		item.EvidenceSource = ProxyEvidenceObserved
+		item.ReasonCode = ProxyQualityReasonRequestFailed
+		item.Message = "检测请求失败"
 		return item
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -374,8 +440,10 @@ func runProxyQualityTarget(ctx context.Context, client *http.Client, target prox
 
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, proxyQualityMaxBodyBytes+1))
 	if readErr != nil {
-		item.Status = "fail"
-		item.Message = fmt.Sprintf("读取响应失败: %v", readErr)
+		item.Status = "unknown"
+		item.EvidenceSource = ProxyEvidenceUnavailable
+		item.ReasonCode = ProxyQualityReasonResponseReadFailed
+		item.Message = "读取检测响应失败"
 		return item
 	}
 	if int64(len(body)) > proxyQualityMaxBodyBytes {
@@ -385,6 +453,8 @@ func runProxyQualityTarget(ctx context.Context, client *http.Client, target prox
 	// Cloudflare challenge 检测
 	if httputil.IsCloudflareChallengeResponse(resp.StatusCode, resp.Header, body) {
 		item.Status = "challenge"
+		item.EvidenceSource = ProxyEvidenceObserved
+		item.ReasonCode = ProxyQualityReasonCloudflareChallenge
 		item.CFRay = httputil.ExtractCloudflareRayID(resp.Header, body)
 		item.Message = "命中 Cloudflare challenge"
 		return item
@@ -394,6 +464,7 @@ func runProxyQualityTarget(ctx context.Context, client *http.Client, target prox
 		// 白名单内的状态码均代表目标可达：2xx 表示接口直接可用，
 		// 401/405 等是无鉴权探测的预期结果，同样视为连通正常，不再扣分。
 		item.Status = "pass"
+		item.EvidenceSource = ProxyEvidenceObserved
 		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
 			item.Message = fmt.Sprintf("HTTP %d", resp.StatusCode)
 		} else {
@@ -404,11 +475,15 @@ func runProxyQualityTarget(ctx context.Context, client *http.Client, target prox
 
 	if resp.StatusCode == http.StatusTooManyRequests {
 		item.Status = "warn"
+		item.EvidenceSource = ProxyEvidenceObserved
+		item.ReasonCode = ProxyQualityReasonTargetRateLimited
 		item.Message = "目标返回 429，可能存在频控"
 		return item
 	}
 
 	item.Status = "fail"
+	item.EvidenceSource = ProxyEvidenceObserved
+	item.ReasonCode = ProxyQualityReasonUnexpectedHTTPStatus
 	item.Message = fmt.Sprintf("非预期状态码: %d", resp.StatusCode)
 	return item
 }
@@ -421,15 +496,30 @@ func finalizeProxyQualityResult(result *ProxyQualityCheckResult) {
 	if score < 0 {
 		score = 0
 	}
+	if result.PassedCount+result.WarnCount+result.FailedCount+result.ChallengeCount == 0 {
+		score = 0
+	}
 	result.Score = score
-	result.Grade = proxyQualityGrade(score)
+	if result.UnknownCount > 0 || result.PassedCount+result.WarnCount+result.FailedCount+result.ChallengeCount == 0 {
+		result.Grade = "unknown"
+	} else {
+		result.Grade = proxyQualityGrade(score)
+	}
+	result.OverallStatus = proxyQualityOverallStatus(result)
 	result.Summary = fmt.Sprintf(
-		"通过 %d 项，告警 %d 项，失败 %d 项，挑战 %d 项",
+		"通过 %d 项，告警 %d 项，失败 %d 项，挑战 %d 项，未知 %d 项，不适用 %d 项",
 		result.PassedCount,
 		result.WarnCount,
 		result.FailedCount,
 		result.ChallengeCount,
+		result.UnknownCount,
+		result.NotApplicableCount,
 	)
+	if result.UnknownCount > 0 {
+		result.Summary += "（部分证据，评分为已知项目的暂定分）"
+	} else if result.PassedCount+result.WarnCount+result.FailedCount+result.ChallengeCount == 0 && result.NotApplicableCount > 0 {
+		result.Summary += "（没有适用的检测项，暂未评级）"
+	}
 }
 
 func proxyQualityGrade(score int) string {
@@ -460,10 +550,13 @@ func proxyQualityOverallStatus(result *ProxyQualityCheckResult) string {
 	if result.WarnCount > 0 {
 		return "warn"
 	}
+	if result.UnknownCount > 0 {
+		return "unknown"
+	}
 	if result.PassedCount > 0 {
 		return "healthy"
 	}
-	return "failed"
+	return "unknown"
 }
 
 func proxyQualityFirstCFRay(result *ProxyQualityCheckResult) string {
@@ -479,15 +572,19 @@ func proxyQualityFirstCFRay(result *ProxyQualityCheckResult) string {
 }
 
 func proxyQualityBaseConnectivityPass(result *ProxyQualityCheckResult) bool {
+	return proxyQualityBaseConnectivityStatus(result) == "pass"
+}
+
+func proxyQualityBaseConnectivityStatus(result *ProxyQualityCheckResult) string {
 	if result == nil {
-		return false
+		return ""
 	}
 	for _, item := range result.Items {
 		if item.Target == "base_connectivity" {
-			return item.Status == "pass"
+			return item.Status
 		}
 	}
-	return false
+	return "unknown"
 }
 
 func (s *adminServiceImpl) saveProxyQualitySnapshot(ctx context.Context, proxyID int64, result *ProxyQualityCheckResult, exitInfo *ProxyExitInfo) {
@@ -497,8 +594,6 @@ func (s *adminServiceImpl) saveProxyQualitySnapshot(ctx context.Context, proxyID
 	score := result.Score
 	checkedAt := result.CheckedAt
 	info := &ProxyLatencyInfo{
-		Success:          proxyQualityBaseConnectivityPass(result),
-		Message:          result.Summary,
 		QualityStatus:    proxyQualityOverallStatus(result),
 		QualityScore:     &score,
 		QualityGrade:     result.Grade,
@@ -507,11 +602,20 @@ func (s *adminServiceImpl) saveProxyQualitySnapshot(ctx context.Context, proxyID
 		QualityCFRay:     proxyQualityFirstCFRay(result),
 		UpdatedAt:        time.Now(),
 	}
-	if result.BaseLatencyMs > 0 {
+	baseStatus := proxyQualityBaseConnectivityStatus(result)
+	if baseStatus == "pass" {
+		info.Success = true
+		info.Message = result.Summary
+	}
+	if baseStatus == "fail" {
+		info.Success = false
+		info.Message = result.Summary
+	}
+	if baseStatus == "pass" && result.BaseLatencyMs > 0 {
 		latency := result.BaseLatencyMs
 		info.LatencyMs = &latency
 	}
-	if exitInfo != nil {
+	if baseStatus == "pass" && exitInfo != nil {
 		info.IPAddress = exitInfo.IP
 		info.Country = exitInfo.Country
 		info.CountryCode = exitInfo.CountryCode
@@ -527,11 +631,17 @@ func (s *adminServiceImpl) probeProxyLatency(ctx context.Context, proxy *Proxy) 
 	}
 	exitInfo, latencyMs, err := s.proxyProber.ProbeProxy(ctx, proxy.URL())
 	if err != nil {
+		if _, unknown := proxyProbeUnknownForContext(ctx.Err(), err); unknown {
+			return
+		}
 		s.saveProxyLatency(ctx, proxy.ID, &ProxyLatencyInfo{
 			Success:   false,
-			Message:   err.Error(),
+			Message:   "Proxy probe failed",
 			UpdatedAt: time.Now(),
 		})
+		return
+	}
+	if exitInfo == nil || net.ParseIP(exitInfo.IP) == nil {
 		return
 	}
 
@@ -570,18 +680,20 @@ func (s *adminServiceImpl) attachProxyLatency(ctx context.Context, proxies []Pro
 		if info == nil {
 			continue
 		}
-		if info.Success {
-			proxies[i].LatencyStatus = "success"
-			proxies[i].LatencyMs = info.LatencyMs
-		} else {
-			proxies[i].LatencyStatus = "failed"
+		if info.QualityStatus != "unknown" || info.Message != "" || info.LatencyMs != nil {
+			if info.Success {
+				proxies[i].LatencyStatus = "success"
+				proxies[i].LatencyMs = info.LatencyMs
+			} else {
+				proxies[i].LatencyStatus = "failed"
+			}
+			proxies[i].LatencyMessage = info.Message
+			proxies[i].IPAddress = info.IPAddress
+			proxies[i].Country = info.Country
+			proxies[i].CountryCode = info.CountryCode
+			proxies[i].Region = info.Region
+			proxies[i].City = info.City
 		}
-		proxies[i].LatencyMessage = info.Message
-		proxies[i].IPAddress = info.IPAddress
-		proxies[i].Country = info.Country
-		proxies[i].CountryCode = info.CountryCode
-		proxies[i].Region = info.Region
-		proxies[i].City = info.City
 		proxies[i].QualityStatus = info.QualityStatus
 		proxies[i].QualityScore = info.QualityScore
 		proxies[i].QualityGrade = info.QualityGrade
@@ -598,6 +710,17 @@ func (s *adminServiceImpl) saveProxyLatency(ctx context.Context, proxyID int64, 
 	merged := *info
 	if latencies, err := s.proxyLatencyCache.GetProxyLatencies(ctx, []int64{proxyID}); err == nil {
 		if existing := latencies[proxyID]; existing != nil {
+			if info.QualityStatus != "" && info.Message == "" && info.LatencyMs == nil &&
+				info.IPAddress == "" && info.Country == "" && info.CountryCode == "" && info.Region == "" && info.City == "" {
+				merged.Success = existing.Success
+				merged.LatencyMs = existing.LatencyMs
+				merged.Message = existing.Message
+				merged.IPAddress = existing.IPAddress
+				merged.Country = existing.Country
+				merged.CountryCode = existing.CountryCode
+				merged.Region = existing.Region
+				merged.City = existing.City
+			}
 			if merged.QualityCheckedAt == nil &&
 				merged.QualityScore == nil &&
 				merged.QualityGrade == "" &&

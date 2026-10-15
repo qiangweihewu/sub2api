@@ -594,6 +594,8 @@ type ProxyBatchDeleteSkipped struct {
 // ProxyTestResult represents the result of testing a proxy
 type ProxyTestResult struct {
 	Success     bool   `json:"success"`
+	Status      string `json:"status,omitempty"`
+	ReasonCode  string `json:"reason_code,omitempty"`
 	Message     string `json:"message"`
 	LatencyMs   int64  `json:"latency_ms,omitempty"`
 	IPAddress   string `json:"ip_address,omitempty"`
@@ -604,29 +606,34 @@ type ProxyTestResult struct {
 }
 
 type ProxyQualityCheckResult struct {
-	ProxyID        int64                   `json:"proxy_id"`
-	Score          int                     `json:"score"`
-	Grade          string                  `json:"grade"`
-	Summary        string                  `json:"summary"`
-	ExitIP         string                  `json:"exit_ip,omitempty"`
-	Country        string                  `json:"country,omitempty"`
-	CountryCode    string                  `json:"country_code,omitempty"`
-	BaseLatencyMs  int64                   `json:"base_latency_ms,omitempty"`
-	PassedCount    int                     `json:"passed_count"`
-	WarnCount      int                     `json:"warn_count"`
-	FailedCount    int                     `json:"failed_count"`
-	ChallengeCount int                     `json:"challenge_count"`
-	CheckedAt      int64                   `json:"checked_at"`
-	Items          []ProxyQualityCheckItem `json:"items"`
+	ProxyID            int64                   `json:"proxy_id"`
+	Score              int                     `json:"score"`
+	Grade              string                  `json:"grade"`
+	Summary            string                  `json:"summary"`
+	OverallStatus      string                  `json:"overall_status"`
+	ExitIP             string                  `json:"exit_ip,omitempty"`
+	Country            string                  `json:"country,omitempty"`
+	CountryCode        string                  `json:"country_code,omitempty"`
+	BaseLatencyMs      int64                   `json:"base_latency_ms,omitempty"`
+	PassedCount        int                     `json:"passed_count"`
+	WarnCount          int                     `json:"warn_count"`
+	FailedCount        int                     `json:"failed_count"`
+	ChallengeCount     int                     `json:"challenge_count"`
+	UnknownCount       int                     `json:"unknown_count"`
+	NotApplicableCount int                     `json:"not_applicable_count"`
+	CheckedAt          int64                   `json:"checked_at"`
+	Items              []ProxyQualityCheckItem `json:"items"`
 }
 
 type ProxyQualityCheckItem struct {
-	Target     string `json:"target"`
-	Status     string `json:"status"` // pass/warn/fail/challenge
-	HTTPStatus int    `json:"http_status,omitempty"`
-	LatencyMs  int64  `json:"latency_ms,omitempty"`
-	Message    string `json:"message,omitempty"`
-	CFRay      string `json:"cf_ray,omitempty"`
+	Target         string `json:"target"`
+	Status         string `json:"status"`          // pass/warn/fail/challenge/unknown/not_applicable
+	EvidenceSource string `json:"evidence_source"` // config/observed/unavailable
+	ReasonCode     string `json:"reason_code,omitempty"`
+	HTTPStatus     int    `json:"http_status,omitempty"`
+	LatencyMs      int64  `json:"latency_ms,omitempty"`
+	Message        string `json:"message,omitempty"`
+	CFRay          string `json:"cf_ray,omitempty"`
 }
 
 // ProxyExitInfo represents proxy exit information from ip-api.com

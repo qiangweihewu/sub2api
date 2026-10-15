@@ -1,0 +1,17 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "gray-on-color",
+        "value": "*",
+        "files": [
+          "frontend/src/views/admin/ProxiesView.vue"
+        ],
+        "createdAt": "2026-10-15T03:08:21.420Z",
+        "reason": "Agent verified: gray text is the transparent resting state; each emerald/blue/red hover background has a matching hover text hue including dark variants. Detector conflates resting and hover states."
+      }
+    ]
+  }
+}

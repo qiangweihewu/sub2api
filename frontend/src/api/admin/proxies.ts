@@ -134,6 +134,8 @@ export async function toggleStatus(id: number, status: 'active' | 'inactive'): P
  */
 export async function testProxy(id: number): Promise<{
   success: boolean
+  status?: 'success' | 'failed' | 'unknown'
+  reason_code?: string
   message: string
   latency_ms?: number
   ip_address?: string
@@ -144,6 +146,8 @@ export async function testProxy(id: number): Promise<{
 }> {
   const { data } = await apiClient.post<{
     success: boolean
+    status?: 'success' | 'failed' | 'unknown'
+    reason_code?: string
     message: string
     latency_ms?: number
     ip_address?: string

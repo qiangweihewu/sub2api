@@ -1009,14 +1009,14 @@ export interface Proxy {
   status: 'active' | 'inactive' | 'expired'
   account_count?: number // Number of accounts using this proxy
   latency_ms?: number
-  latency_status?: 'success' | 'failed'
+  latency_status?: 'success' | 'failed' | 'unknown'
   latency_message?: string
   ip_address?: string
   country?: string
   country_code?: string
   region?: string
   city?: string
-  quality_status?: 'healthy' | 'warn' | 'challenge' | 'failed'
+  quality_status?: 'healthy' | 'warn' | 'challenge' | 'failed' | 'unknown'
   quality_score?: number
   quality_grade?: string
   quality_summary?: string
@@ -1039,7 +1039,9 @@ export interface ProxyAccountSummary {
 
 export interface ProxyQualityCheckItem {
   target: string
-  status: 'pass' | 'warn' | 'fail' | 'challenge'
+  status: 'pass' | 'warn' | 'fail' | 'challenge' | 'unknown' | 'not_applicable'
+  evidence_source?: 'config' | 'observed' | 'unavailable'
+  reason_code?: string
   http_status?: number
   latency_ms?: number
   message?: string
@@ -1059,6 +1061,9 @@ export interface ProxyQualityCheckResult {
   warn_count: number
   failed_count: number
   challenge_count: number
+  unknown_count?: number
+  not_applicable_count?: number
+  overall_status?: 'healthy' | 'warn' | 'challenge' | 'failed' | 'unknown'
   checked_at: number
   items: ProxyQualityCheckItem[]
 }

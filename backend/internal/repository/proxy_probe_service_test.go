@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -40,13 +41,13 @@ func (s *ProxyProbeServiceSuite) setupProxyServer(handler http.HandlerFunc) {
 func (s *ProxyProbeServiceSuite) TestProbeProxy_InvalidProxyURL() {
 	_, _, err := s.prober.ProbeProxy(s.ctx, "://bad")
 	require.Error(s.T(), err)
-	require.ErrorContains(s.T(), err, "failed to create proxy client")
+	require.Equal(s.T(), service.ProxyQualityReasonProbeResponseUncertain, service.ProxyProbeDiagnosticErrorReason(err))
 }
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_UnsupportedProxyScheme() {
 	_, _, err := s.prober.ProbeProxy(s.ctx, "ftp://127.0.0.1:1")
 	require.Error(s.T(), err)
-	require.ErrorContains(s.T(), err, "failed to create proxy client")
+	require.Equal(s.T(), service.ProxyQualityReasonProbeResponseUncertain, service.ProxyProbeDiagnosticErrorReason(err))
 }
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_Success_IPAPI() {
@@ -100,7 +101,7 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_AllFailed() {
 
 	_, _, err := s.prober.ProbeProxy(s.ctx, s.proxySrv.URL)
 	require.Error(s.T(), err)
-	require.ErrorContains(s.T(), err, "all probe URLs failed")
+	require.Equal(s.T(), service.ProxyQualityReasonProbeResponseUncertain, service.ProxyProbeDiagnosticErrorReason(err))
 }
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_InvalidJSON() {
@@ -121,7 +122,7 @@ func (s *ProxyProbeServiceSuite) TestProbeProxy_InvalidJSON() {
 
 	_, _, err := s.prober.ProbeProxy(s.ctx, s.proxySrv.URL)
 	require.Error(s.T(), err)
-	require.ErrorContains(s.T(), err, "all probe URLs failed")
+	require.Equal(s.T(), service.ProxyQualityReasonProbeResponseUncertain, service.ProxyProbeDiagnosticErrorReason(err))
 }
 
 func (s *ProxyProbeServiceSuite) TestProbeProxy_ProxyServerClosed() {
@@ -148,7 +149,7 @@ func (s *ProxyProbeServiceSuite) TestParseIPAPI_Failure() {
 	body := []byte(`{"status":"fail","message":"rate limited"}`)
 	_, _, err := s.prober.parseIPAPI(body, 100)
 	require.Error(s.T(), err)
-	require.ErrorContains(s.T(), err, "rate limited")
+	require.Equal(s.T(), service.ProxyQualityReasonProbeResponseUncertain, service.ProxyProbeDiagnosticErrorReason(err))
 }
 
 func (s *ProxyProbeServiceSuite) TestParseIPify_Success() {
@@ -163,7 +164,7 @@ func (s *ProxyProbeServiceSuite) TestParseIPify_NoIP() {
 	body := []byte(`{"ip": ""}`)
 	_, _, err := s.prober.parseIPify(body, 50)
 	require.Error(s.T(), err)
-	require.ErrorContains(s.T(), err, "no IP found")
+	require.Equal(s.T(), service.ProxyQualityReasonInvalidProbeResponse, service.ProxyProbeDiagnosticErrorReason(err))
 }
 
 func (s *ProxyProbeServiceSuite) TestParseChatGPTTrace_Success() {
@@ -179,7 +180,7 @@ func (s *ProxyProbeServiceSuite) TestParseChatGPTTrace_NoIP() {
 	body := []byte("fl=abc\nh=chatgpt.com\nloc=US\n")
 	_, _, err := s.prober.parseChatGPTTrace(body, 100)
 	require.Error(s.T(), err)
-	require.ErrorContains(s.T(), err, "chatgpt-trace: no ip= found")
+	require.Equal(s.T(), service.ProxyQualityReasonInvalidProbeResponse, service.ProxyProbeDiagnosticErrorReason(err))
 }
 
 func TestProxyProbeServiceSuite(t *testing.T) {

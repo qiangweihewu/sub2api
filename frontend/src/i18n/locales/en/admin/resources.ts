@@ -187,7 +187,7 @@ export default {
       qualityCheckDone: 'Quality check completed: score {score} ({grade})',
       qualityCheckFailed: 'Failed to run proxy quality check',
       batchQualityDone:
-        'Batch quality check completed for {count} proxies: healthy {healthy}, warn {warn}, challenge {challenge}, abnormal {failed}',
+        'Batch quality check completed for {count} proxies: healthy {healthy}, warn {warn}, challenge {challenge}, abnormal {failed}, unknown/unrated {unknown}',
       batchQualityFailed: 'Batch quality check failed',
       batchQualityEmpty: 'No proxies available for quality check',
       qualityReportTitle: 'Proxy Quality Report',
@@ -206,6 +206,9 @@ export default {
       qualityStatusWarn: 'Warn',
       qualityStatusFail: 'Fail',
       qualityStatusChallenge: 'Challenge',
+      qualityStatusUnknown: 'Unknown',
+      qualityStatusNotApplicable: 'Not applicable',
+      qualityIncomplete: 'Incomplete evidence (unrated)',
       qualityTargetBase: 'Base Connectivity',
       proxyCreatedSuccess: 'Proxy created successfully',
       proxyUpdatedSuccess: 'Proxy updated successfully',

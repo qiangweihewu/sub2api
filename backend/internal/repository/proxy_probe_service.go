@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -89,17 +90,24 @@ func (s *proxyProbeService) ProbeProxy(ctx context.Context, proxyURL string) (*s
 		AllowPrivateHosts:  s.allowPrivateHosts,
 	})
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create proxy client: %w", err)
+		return nil, 0, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonProbeResponseUncertain)
 	}
 
 	var lastErr error
+	sawUncertainResponse := false
 	if len(s.configuredProbeURLs) > 0 {
 		for _, probe := range s.configuredProbeURLs {
 			exitInfo, latencyMs, err := s.probeWithURL(ctx, client, probe.url, probe.parser)
 			if err == nil {
 				return exitInfo, latencyMs, nil
 			}
+			if service.ProxyProbeDiagnosticErrorReason(err) != "" {
+				sawUncertainResponse = true
+			}
 			lastErr = err
+		}
+		if sawUncertainResponse {
+			return nil, 0, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonProbeResponseUncertain)
 		}
 		return nil, 0, fmt.Errorf("all probe URLs failed, last error: %w", lastErr)
 	}
@@ -109,7 +117,13 @@ func (s *proxyProbeService) ProbeProxy(ctx context.Context, proxyURL string) (*s
 		if err == nil {
 			return exitInfo, latencyMs, nil
 		}
+		if service.ProxyProbeDiagnosticErrorReason(err) != "" {
+			sawUncertainResponse = true
+		}
 		lastErr = err
+	}
+	if sawUncertainResponse {
+		return nil, 0, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonProbeResponseUncertain)
 	}
 
 	return nil, 0, fmt.Errorf("all probe URLs failed, last error: %w", lastErr)
@@ -119,7 +133,7 @@ func (s *proxyProbeService) probeWithURL(ctx context.Context, client *http.Clien
 	startTime := time.Now()
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 	if err != nil {
-		return nil, 0, fmt.Errorf("failed to create request: %w", err)
+		return nil, 0, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonRequestBuildFailed)
 	}
 
 	resp, err := client.Do(req)
@@ -131,7 +145,7 @@ func (s *proxyProbeService) probeWithURL(ctx context.Context, client *http.Clien
 	latencyMs := time.Since(startTime).Milliseconds()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, latencyMs, fmt.Errorf("request failed with status: %d", resp.StatusCode)
+		return nil, latencyMs, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonUnexpectedHTTPStatus)
 	}
 
 	maxResponseBytes := s.maxResponseBytes
@@ -140,10 +154,10 @@ func (s *proxyProbeService) probeWithURL(ctx context.Context, client *http.Clien
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBytes+1))
 	if err != nil {
-		return nil, latencyMs, fmt.Errorf("failed to read response: %w", err)
+		return nil, latencyMs, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonResponseReadFailed)
 	}
 	if int64(len(body)) > maxResponseBytes {
-		return nil, latencyMs, fmt.Errorf("proxy probe response exceeds limit: %d", maxResponseBytes)
+		return nil, latencyMs, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonInvalidProbeResponse)
 	}
 
 	switch parser {
@@ -154,7 +168,7 @@ func (s *proxyProbeService) probeWithURL(ctx context.Context, client *http.Clien
 	case "chatgpt-trace":
 		return s.parseChatGPTTrace(body, latencyMs)
 	default:
-		return nil, latencyMs, fmt.Errorf("unknown parser: %s", parser)
+		return nil, latencyMs, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonProbeResponseUncertain)
 	}
 }
 
@@ -171,17 +185,16 @@ func (s *proxyProbeService) parseIPAPI(body []byte, latencyMs int64) (*service.P
 	}
 
 	if err := json.Unmarshal(body, &ipInfo); err != nil {
-		preview := string(body)
-		if len(preview) > 200 {
-			preview = preview[:200] + "..."
-		}
-		return nil, latencyMs, fmt.Errorf("failed to parse response: %w (body: %s)", err, preview)
+		return nil, latencyMs, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonInvalidProbeResponse)
 	}
 	if strings.ToLower(ipInfo.Status) != "success" {
 		if ipInfo.Message == "" {
 			ipInfo.Message = "ip-api request failed"
 		}
-		return nil, latencyMs, fmt.Errorf("ip-api request failed: %s", ipInfo.Message)
+		return nil, latencyMs, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonProbeResponseUncertain)
+	}
+	if net.ParseIP(ipInfo.Query) == nil {
+		return nil, latencyMs, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonInvalidProbeResponse)
 	}
 
 	region := ipInfo.RegionName
@@ -202,10 +215,10 @@ func (s *proxyProbeService) parseIPify(body []byte, latencyMs int64) (*service.P
 		IP string `json:"ip"`
 	}
 	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, latencyMs, fmt.Errorf("failed to parse ipify response: %w", err)
+		return nil, latencyMs, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonInvalidProbeResponse)
 	}
-	if result.IP == "" {
-		return nil, latencyMs, fmt.Errorf("ipify: no IP found in response")
+	if net.ParseIP(result.IP) == nil {
+		return nil, latencyMs, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonInvalidProbeResponse)
 	}
 	return &service.ProxyExitInfo{
 		IP: result.IP,
@@ -228,12 +241,8 @@ func (s *proxyProbeService) parseChatGPTTrace(body []byte, latencyMs int64) (*se
 			loc = strings.TrimSpace(value)
 		}
 	}
-	if ip == "" {
-		preview := string(body)
-		if len(preview) > 200 {
-			preview = preview[:200] + "..."
-		}
-		return nil, latencyMs, fmt.Errorf("chatgpt-trace: no ip= found in response (body: %s)", preview)
+	if net.ParseIP(ip) == nil {
+		return nil, latencyMs, service.NewProxyProbeDiagnosticError(service.ProxyQualityReasonInvalidProbeResponse)
 	}
 	info := &service.ProxyExitInfo{
 		IP: ip,

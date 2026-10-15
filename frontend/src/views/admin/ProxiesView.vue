@@ -218,7 +218,14 @@
           <template #cell-latency="{ row }">
             <div class="flex flex-col gap-1">
               <span
-                v-if="row.latency_status === 'failed'"
+                v-if="row.latency_status === 'unknown'"
+                class="badge badge-gray"
+                :title="row.latency_message || undefined"
+              >
+                {{ t('admin.proxies.qualityStatusUnknown') }}
+              </span>
+              <span
+                v-else-if="row.latency_status === 'failed'"
                 class="badge badge-danger"
                 :title="row.latency_message || undefined"
               >
@@ -236,7 +243,8 @@
                 class="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
                 :title="row.quality_summary || undefined"
               >
-                <span>{{ t('admin.proxies.qualityInline', { grade: row.quality_grade || '-', score: row.quality_score ?? '-' }) }}</span>
+                <span v-if="row.quality_grade === 'unknown'">{{ t('admin.proxies.qualityIncomplete') }}</span>
+                <span v-else>{{ t('admin.proxies.qualityInline', { grade: row.quality_grade || '-', score: row.quality_score ?? '-' }) }}</span>
                 <span class="badge" :class="qualityOverallClass(row.quality_status)">
                   {{ qualityOverallLabel(row.quality_status) }}
                 </span>
@@ -859,10 +867,10 @@
             </div>
             <div class="text-right">
               <div class="text-2xl font-semibold text-gray-900 dark:text-white">
-                {{ qualityReport.score }}
+                {{ qualityReport.grade === 'unknown' ? '-' : qualityReport.score }}
               </div>
               <div class="text-xs text-gray-500 dark:text-gray-400">
-                {{ t('admin.proxies.qualityGrade', { grade: qualityReport.grade }) }}
+                {{ qualityReport.grade === 'unknown' ? t('admin.proxies.qualityIncomplete') : t('admin.proxies.qualityGrade', { grade: qualityReport.grade }) }}
               </div>
             </div>
           </div>
@@ -1490,6 +1498,7 @@ const applyLatencyResult = (
   proxyId: number,
   result: {
     success: boolean
+    status?: 'success' | 'failed' | 'unknown'
     latency_ms?: number
     message?: string
     ip_address?: string
@@ -1501,6 +1510,14 @@ const applyLatencyResult = (
 ) => {
   const target = proxies.value.find((proxy) => proxy.id === proxyId)
   if (!target) return
+  if (result.status === 'unknown') {
+    // A failed observation source cannot invalidate the last measured result.
+    if (!target.latency_status || target.latency_status === 'unknown') {
+      target.latency_status = 'unknown'
+      target.latency_message = result.message
+    }
+    return
+  }
   if (result.success) {
     target.latency_status = 'success'
     target.latency_ms = result.latency_ms
@@ -1522,10 +1539,12 @@ const applyLatencyResult = (
 }
 
 const summarizeQualityStatus = (result: ProxyQualityCheckResult): Proxy['quality_status'] => {
+  if (result.overall_status) return result.overall_status
   if (result.challenge_count > 0) return 'challenge'
   if (result.failed_count > 0) return 'failed'
   if (result.warn_count > 0) return 'warn'
-  return 'healthy'
+  if ((result.unknown_count ?? 0) > 0) return 'unknown'
+  return result.passed_count > 0 ? 'healthy' : 'unknown'
 }
 
 const applyQualityResult = (proxyId: number, result: ProxyQualityCheckResult) => {
@@ -1572,7 +1591,9 @@ const runProxyTest = async (proxyId: number, notify: boolean) => {
     const result = await adminAPI.proxies.testProxy(proxyId)
     applyLatencyResult(proxyId, result)
     if (notify) {
-      if (result.success) {
+      if (result.status === 'unknown') {
+        appStore.showWarning(result.message || t('admin.proxies.qualityStatusUnknown'))
+      } else if (result.success) {
         const message = result.latency_ms
           ? t('admin.proxies.proxyWorkingWithLatency', { latency: result.latency_ms })
           : t('admin.proxies.proxyWorking')
@@ -1584,7 +1605,7 @@ const runProxyTest = async (proxyId: number, notify: boolean) => {
     return result
   } catch (error: any) {
     const message = error.response?.data?.detail || t('admin.proxies.failedToTest')
-    applyLatencyResult(proxyId, { success: false, message })
+    applyLatencyResult(proxyId, { success: false, status: 'unknown', message })
     if (notify) {
       appStore.showError(message)
     }
@@ -1620,9 +1641,8 @@ const handleQualityCheck = async (proxy: Proxy) => {
     }
     applyQualityResult(proxy.id, result)
 
-    appStore.showSuccess(
-      t('admin.proxies.qualityCheckDone', { score: result.score, grade: result.grade })
-    )
+    if (result.grade === 'unknown') appStore.showWarning(t('admin.proxies.qualityIncomplete'))
+    else appStore.showSuccess(t('admin.proxies.qualityCheckDone', { score: result.score, grade: result.grade }))
   } catch (error: any) {
     const message = error.response?.data?.detail || t('admin.proxies.qualityCheckFailed')
     appStore.showError(message)
@@ -1633,7 +1653,7 @@ const handleQualityCheck = async (proxy: Proxy) => {
 }
 
 const runBatchProxyQualityChecks = async (ids: number[]) => {
-  if (ids.length === 0) return { total: 0, healthy: 0, warn: 0, challenge: 0, failed: 0 }
+  if (ids.length === 0) return { total: 0, healthy: 0, warn: 0, challenge: 0, failed: 0, unknown: 0 }
 
   const concurrency = 3
   let index = 0
@@ -1641,6 +1661,7 @@ const runBatchProxyQualityChecks = async (ids: number[]) => {
   let warn = 0
   let challenge = 0
   let failed = 0
+  let unknownCount = 0
 
   const worker = async () => {
     while (index < ids.length) {
@@ -1664,17 +1685,20 @@ const runBatchProxyQualityChecks = async (ids: number[]) => {
           }
         }
         applyQualityResult(current, result)
-        if (result.challenge_count > 0) {
+        const status = summarizeQualityStatus(result)
+        if (status === 'challenge') {
           challenge++
-        } else if (result.failed_count > 0) {
+        } else if (status === 'failed') {
           failed++
-        } else if (result.warn_count > 0) {
+        } else if (status === 'warn') {
           warn++
-        } else {
+        } else if (status === 'healthy') {
           healthy++
+        } else {
+          unknownCount++
         }
       } catch {
-        failed++
+        unknownCount++
       } finally {
         stopQualityCheckingProxy(current)
       }
@@ -1688,7 +1712,8 @@ const runBatchProxyQualityChecks = async (ids: number[]) => {
     healthy,
     warn,
     challenge,
-    failed
+    failed,
+    unknown: unknownCount
   }
 }
 
@@ -1702,14 +1727,17 @@ const qualityStatusClass = (status: string) => {
   if (status === 'pass') return 'badge-success'
   if (status === 'warn') return 'badge-warning'
   if (status === 'challenge') return 'badge-danger'
-  return 'badge-danger'
+  if (status === 'fail') return 'badge-danger'
+  return 'badge-gray'
 }
 
 const qualityStatusLabel = (status: string) => {
   if (status === 'pass') return t('admin.proxies.qualityStatusPass')
   if (status === 'warn') return t('admin.proxies.qualityStatusWarn')
   if (status === 'challenge') return t('admin.proxies.qualityStatusChallenge')
-  return t('admin.proxies.qualityStatusFail')
+  if (status === 'fail') return t('admin.proxies.qualityStatusFail')
+  if (status === 'not_applicable') return t('admin.proxies.qualityStatusNotApplicable')
+  return t('admin.proxies.qualityStatusUnknown')
 }
 
 // 有效期「选天数」⇄ 日历联动:天数自 base 起算(创建=今天;编辑=代理创建日),本地日历日 round-trip 稳定;canonical 仍是 expires_at 日期串
@@ -1769,14 +1797,16 @@ const qualityOverallClass = (status?: string) => {
   if (status === 'healthy') return 'badge-success'
   if (status === 'warn') return 'badge-warning'
   if (status === 'challenge') return 'badge-danger'
-  return 'badge-danger'
+  if (status === 'failed') return 'badge-danger'
+  return 'badge-gray'
 }
 
 const qualityOverallLabel = (status?: string) => {
   if (status === 'healthy') return t('admin.proxies.qualityStatusHealthy')
   if (status === 'warn') return t('admin.proxies.qualityStatusWarn')
   if (status === 'challenge') return t('admin.proxies.qualityStatusChallenge')
-  return t('admin.proxies.qualityStatusFail')
+  if (status === 'failed') return t('admin.proxies.qualityStatusFail')
+  return t('admin.proxies.qualityStatusUnknown')
 }
 
 const qualityTargetLabel = (target: string) => {
@@ -1895,15 +1925,16 @@ const handleBatchQualityCheck = async () => {
     }
 
     const summary = await runBatchProxyQualityChecks(ids)
-    appStore.showSuccess(
-      t('admin.proxies.batchQualityDone', {
+    const message = t('admin.proxies.batchQualityDone', {
         count: summary.total,
         healthy: summary.healthy,
         warn: summary.warn,
         challenge: summary.challenge,
-        failed: summary.failed
+        failed: summary.failed,
+        unknown: summary.unknown
       })
-    )
+    if (summary.unknown > 0) appStore.showWarning(message)
+    else appStore.showSuccess(message)
     loadProxies()
   } catch (error: any) {
     appStore.showError(error.response?.data?.detail || t('admin.proxies.batchQualityFailed'))
