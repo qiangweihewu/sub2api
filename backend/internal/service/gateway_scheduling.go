@@ -343,100 +343,113 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 		}
 
 		if len(routingCandidates) > 0 {
-			// 1.5. 在路由账号范围内检查粘性会话
-			if sessionHash != "" && stickyAccountID > 0 {
-				slog.Debug("sticky.layer1_5_checking",
-					"sticky_account_id", stickyAccountID,
-					"in_routing_list", containsInt64(routingAccountIDs, stickyAccountID),
-					"is_excluded", isExcluded(stickyAccountID),
-					"in_account_map", func() bool { _, ok := accountByID[stickyAccountID]; return ok }(),
-					"session", shortSessionHash(sessionHash),
-				)
-				if containsInt64(routingAccountIDs, stickyAccountID) && !isExcluded(stickyAccountID) {
-					// 粘性账号在路由列表中，优先使用
-					if stickyAccount, ok := accountByID[stickyAccountID]; ok {
-						var stickyCacheMissReason string
+			// Sticky affinity applies within a routing tier, never before a higher
+			// tier has had a chance to acquire a slot. Keep tier 0's fast path and
+			// defer wildcard affinity until the ordered selection reaches its tier.
+			stickyTier, stickyInRouting := routingTierRank[stickyAccountID]
+			stickyPending := stickyInRouting && sessionHash != "" && stickyAccountID > 0
+			tryRoutedSticky := func() (*AccountSelectionResult, error) {
+				if sessionHash != "" && stickyAccountID > 0 {
+					slog.Debug("sticky.layer1_5_checking",
+						"sticky_account_id", stickyAccountID,
+						"in_routing_list", containsInt64(routingAccountIDs, stickyAccountID),
+						"is_excluded", isExcluded(stickyAccountID),
+						"in_account_map", func() bool { _, ok := accountByID[stickyAccountID]; return ok }(),
+						"session", shortSessionHash(sessionHash),
+					)
+					if containsInt64(routingAccountIDs, stickyAccountID) && !isExcluded(stickyAccountID) {
+						// 粘性账号在路由列表中，优先使用
+						if stickyAccount, ok := accountByID[stickyAccountID]; ok {
+							var stickyCacheMissReason string
 
-						gatePass := s.isAccountSchedulableForSelection(stickyAccount) &&
-							s.isGatewayAccountProfitEligible(ctx, stickyAccount) &&
-							s.isAccountAllowedForPlatform(stickyAccount, platform, useMixed) &&
-							(requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, stickyAccount, requestedModel)) &&
-							!isChannelRestricted(stickyAccount) &&
-							s.isAccountSchedulableForModelSelection(ctx, stickyAccount, requestedModel) &&
-							s.isAccountSchedulableForQuota(stickyAccount) &&
-							s.isAccountSchedulableForWindowCost(ctx, stickyAccount, true)
+							gatePass := s.isAccountSchedulableForSelection(stickyAccount) &&
+								s.isGatewayAccountProfitEligible(ctx, stickyAccount) &&
+								s.isAccountAllowedForPlatform(stickyAccount, platform, useMixed) &&
+								(requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, stickyAccount, requestedModel)) &&
+								!isChannelRestricted(stickyAccount) &&
+								s.isAccountSchedulableForModelSelection(ctx, stickyAccount, requestedModel) &&
+								s.isAccountSchedulableForQuota(stickyAccount) &&
+								s.isAccountSchedulableForWindowCost(ctx, stickyAccount, true)
 
-						rpmPass := gatePass && s.isAccountSchedulableForRPM(ctx, stickyAccount, true)
+							rpmPass := gatePass && s.isAccountSchedulableForRPM(ctx, stickyAccount, true)
 
-						if rpmPass { // 粘性会话窗口费用+RPM 检查
-							result, err := s.tryAcquireAccountSlot(ctx, stickyAccountID, s.effectiveAccountConcurrency(ctx, stickyAccount))
-							if err == nil && result.Acquired {
-								// 会话数量限制检查
-								if !s.checkAndRegisterSession(ctx, stickyAccount, sessionHash) {
-									result.ReleaseFunc() // 释放槽位
-									stickyCacheMissReason = "session_limit"
-									// 继续到负载感知选择
-								} else {
-									slog.Debug("sticky.layer1_5_hit",
-										"account_id", stickyAccountID,
-										"session", shortSessionHash(sessionHash),
-										"result", "slot_acquired",
-									)
-									if s.debugModelRoutingEnabled() {
-										logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), stickyAccountID)
-									}
-									return s.newSelectionResult(ctx, stickyAccount, true, result.ReleaseFunc, nil)
-								}
-							}
-
-							if stickyCacheMissReason == "" {
-								waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, stickyAccountID)
-								if waitingCount < cfg.StickySessionMaxWaiting {
-									// 会话数量限制检查（等待计划也需要占用会话配额）
+							if rpmPass { // 粘性会话窗口费用+RPM 检查
+								result, err := s.tryAcquireAccountSlot(ctx, stickyAccountID, s.effectiveAccountConcurrency(ctx, stickyAccount))
+								if err == nil && result.Acquired {
+									// 会话数量限制检查
 									if !s.checkAndRegisterSession(ctx, stickyAccount, sessionHash) {
+										result.ReleaseFunc() // 释放槽位
 										stickyCacheMissReason = "session_limit"
-										// 会话限制已满，继续到负载感知选择
+										// 继续到负载感知选择
 									} else {
-										return &AccountSelectionResult{
-											Account: stickyAccount,
-											WaitPlan: &AccountWaitPlan{
-												AccountID:      stickyAccountID,
-												MaxConcurrency: s.effectiveAccountConcurrency(ctx, stickyAccount),
-												Timeout:        cfg.StickySessionWaitTimeout,
-												MaxWaiting:     cfg.StickySessionMaxWaiting,
-											},
-										}, nil
+										slog.Debug("sticky.layer1_5_hit",
+											"account_id", stickyAccountID,
+											"session", shortSessionHash(sessionHash),
+											"result", "slot_acquired",
+										)
+										if s.debugModelRoutingEnabled() {
+											logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), stickyAccountID)
+										}
+										return s.newSelectionResult(ctx, stickyAccount, true, result.ReleaseFunc, nil)
 									}
-								} else {
-									stickyCacheMissReason = "wait_queue_full"
 								}
-							}
-							// 粘性账号槽位满且等待队列已满，继续使用负载感知选择
-						} else if !gatePass {
-							stickyCacheMissReason = "gate_check"
-						} else {
-							stickyCacheMissReason = "rpm_red"
-						}
 
-						// 记录粘性缓存未命中的结构化日志
-						if stickyCacheMissReason != "" {
-							baseRPM := s.effectiveAccountBaseRPM(ctx, stickyAccount)
-							var currentRPM int
-							if count, ok := rpmFromPrefetchContext(ctx, stickyAccount.ID); ok {
-								currentRPM = count
+								if stickyCacheMissReason == "" {
+									waitingCount, _ := s.concurrencyService.GetAccountWaitingCount(ctx, stickyAccountID)
+									if waitingCount < cfg.StickySessionMaxWaiting {
+										// 会话数量限制检查（等待计划也需要占用会话配额）
+										if !s.checkAndRegisterSession(ctx, stickyAccount, sessionHash) {
+											stickyCacheMissReason = "session_limit"
+											// 会话限制已满，继续到负载感知选择
+										} else {
+											return &AccountSelectionResult{
+												Account: stickyAccount,
+												WaitPlan: &AccountWaitPlan{
+													AccountID:      stickyAccountID,
+													MaxConcurrency: s.effectiveAccountConcurrency(ctx, stickyAccount),
+													Timeout:        cfg.StickySessionWaitTimeout,
+													MaxWaiting:     cfg.StickySessionMaxWaiting,
+												},
+											}, nil
+										}
+									} else {
+										stickyCacheMissReason = "wait_queue_full"
+									}
+								}
+								// 粘性账号槽位满且等待队列已满，继续使用负载感知选择
+							} else if !gatePass {
+								stickyCacheMissReason = "gate_check"
+							} else {
+								stickyCacheMissReason = "rpm_red"
 							}
-							logger.LegacyPrintf("service.gateway", "[StickyCacheMiss] reason=%s account_id=%d session=%s current_rpm=%d base_rpm=%d",
-								stickyCacheMissReason, stickyAccountID, shortSessionHash(sessionHash), currentRPM, baseRPM)
+
+							// 记录粘性缓存未命中的结构化日志
+							if stickyCacheMissReason != "" {
+								baseRPM := s.effectiveAccountBaseRPM(ctx, stickyAccount)
+								var currentRPM int
+								if count, ok := rpmFromPrefetchContext(ctx, stickyAccount.ID); ok {
+									currentRPM = count
+								}
+								logger.LegacyPrintf("service.gateway", "[StickyCacheMiss] reason=%s account_id=%d session=%s current_rpm=%d base_rpm=%d",
+									stickyCacheMissReason, stickyAccountID, shortSessionHash(sessionHash), currentRPM, baseRPM)
+							}
+						} else {
+							_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
+							// P0-2: Also clear long-term binding when account is cleared
+							if fp, _ := ctx.Value(ctxkey.PrefetchedProjectFP).(string); fp != "" {
+								s.DeleteLongTermBinding(ctx, fp, derefGroupID(groupID))
+							}
+							logger.LegacyPrintf("service.gateway", "[StickyCacheMiss] reason=account_cleared account_id=%d session=%s current_rpm=0 base_rpm=0",
+								stickyAccountID, shortSessionHash(sessionHash))
 						}
-					} else {
-						_ = s.cache.DeleteSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
-						// P0-2: Also clear long-term binding when account is cleared
-						if fp, _ := ctx.Value(ctxkey.PrefetchedProjectFP).(string); fp != "" {
-							s.DeleteLongTermBinding(ctx, fp, derefGroupID(groupID))
-						}
-						logger.LegacyPrintf("service.gateway", "[StickyCacheMiss] reason=account_cleared account_id=%d session=%s current_rpm=0 base_rpm=0",
-							stickyAccountID, shortSessionHash(sessionHash))
 					}
+				}
+				return nil, nil
+			}
+			if stickyPending && stickyTier == 0 {
+				stickyPending = false
+				if selection, err := tryRoutedSticky(); selection != nil || err != nil {
+					return selection, err
 				}
 			}
 
@@ -495,6 +508,12 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 
 				// 4. 尝试获取槽位
 				for _, item := range routingAvailable {
+					if stickyPending && item.routingRank >= stickyTier {
+						stickyPending = false
+						if selection, err := tryRoutedSticky(); selection != nil || err != nil {
+							return selection, err
+						}
+					}
 					result, err := s.tryAcquireAccountSlot(ctx, item.account.ID, s.effectiveAccountConcurrency(ctx, item.account))
 					if err == nil && result.Acquired {
 						// 会话数量限制检查
@@ -509,6 +528,15 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 							logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] routed select: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), item.account.ID)
 						}
 						return s.newSelectionResult(ctx, item.account, true, result.ReleaseFunc, nil)
+					}
+				}
+
+				// A sticky fallback may pass its sticky gates even when it was not
+				// in routingAvailable (e.g. a stale full-load snapshot).
+				if stickyPending {
+					stickyPending = false
+					if selection, err := tryRoutedSticky(); selection != nil || err != nil {
+						return selection, err
 					}
 				}
 
@@ -529,6 +557,11 @@ func (s *GatewayService) SelectAccountWithLoadAwareness(ctx context.Context, gro
 					})
 				}
 				// 所有路由账号会话限制都已满，继续到 Layer 2 回退
+			}
+			if stickyPending {
+				if selection, err := tryRoutedSticky(); selection != nil || err != nil {
+					return selection, err
+				}
 			}
 			// 路由列表中的账号都不可用（负载率 >= 100），继续到 Layer 2 回退
 			logger.LegacyPrintf("service.gateway", "[ModelRouting] All routed accounts unavailable for model=%s, falling back to normal selection", requestedModel)
@@ -1914,7 +1947,9 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy routed begin: group_id=%v model=%s platform=%s session=%s routed_ids=%v",
 				derefGroupID(groupID), requestedModel, platform, shortSessionHash(sessionHash), routingAccountIDs)
 		}
-		// 1) Sticky session only applies if the bound account is within the routing set.
+		var routedSticky *Account
+		// 1) Keep same-tier sticky affinity, but defer lower-tier sticky accounts
+		// until higher-tier candidate eligibility has been checked.
 		if sessionHash != "" && s.cache != nil {
 			accountID, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 			if err == nil && accountID > 0 && containsInt64(routingAccountIDs, accountID) {
@@ -1931,10 +1966,13 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 							}
 						}
 						if !clearSticky && s.isGatewayAccountProfitEligible(ctx, account) && s.isAccountInGroup(account, groupID) && account.Platform == platform && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) && !s.isStickyAccountUpstreamRestricted(ctx, groupID, account, requestedModel) {
-							if s.debugModelRoutingEnabled() {
-								logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
+							if routingTierRank[accountID] == 0 {
+								if s.debugModelRoutingEnabled() {
+									logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
+								}
+								return account, nil
 							}
-							return account, nil
+							routedSticky = account
 						}
 					}
 				}
@@ -2036,6 +2074,12 @@ func (s *GatewayService) selectAccountForModelWithPlatform(ctx context.Context, 
 			}
 		}
 
+		if routedSticky != nil && (selected == nil || routingTierRank[routedSticky.ID] <= routingTierRank[selected.ID]) {
+			if s.debugModelRoutingEnabled() {
+				logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), routedSticky.ID)
+			}
+			return routedSticky, nil
+		}
 		if selected != nil {
 			if sessionHash != "" && s.cache != nil {
 				if err := s.bindGatewayStickySessionDuringSelection(ctx, groupID, sessionHash, selected.ID); err != nil {
@@ -2196,7 +2240,9 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 			logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy mixed routed begin: group_id=%v model=%s platform=%s session=%s routed_ids=%v",
 				derefGroupID(groupID), requestedModel, nativePlatform, shortSessionHash(sessionHash), routingAccountIDs)
 		}
-		// 1) Sticky session only applies if the bound account is within the routing set.
+		var routedSticky *Account
+		// 1) Keep same-tier sticky affinity, but defer lower-tier sticky accounts
+		// until higher-tier candidate eligibility has been checked.
 		if sessionHash != "" && s.cache != nil {
 			accountID, err := s.cache.GetSessionAccountID(ctx, derefGroupID(groupID), sessionHash)
 			if err == nil && accountID > 0 && containsInt64(routingAccountIDs, accountID) {
@@ -2214,10 +2260,13 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 						}
 						if !clearSticky && s.isGatewayAccountProfitEligible(ctx, account) && s.isAccountInGroup(account, groupID) && (requestedModel == "" || s.isModelSupportedByAccountWithContext(ctx, account, requestedModel)) && s.isAccountSchedulableForModelSelection(ctx, account, requestedModel) && s.isAccountSchedulableForQuota(account) && s.isAccountSchedulableForWindowCost(ctx, account, true) && s.isAccountSchedulableForRPM(ctx, account, true) {
 							if account.Platform == nativePlatform || (account.Platform == PlatformAntigravity && account.IsMixedSchedulingEnabled()) {
-								if s.debugModelRoutingEnabled() {
-									logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy mixed routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
+								if routingTierRank[accountID] == 0 {
+									if s.debugModelRoutingEnabled() {
+										logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy mixed routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), accountID)
+									}
+									return account, nil
 								}
-								return account, nil
+								routedSticky = account
 							}
 						}
 					}
@@ -2320,6 +2369,12 @@ func (s *GatewayService) selectAccountWithMixedScheduling(ctx context.Context, g
 			}
 		}
 
+		if routedSticky != nil && (selected == nil || routingTierRank[routedSticky.ID] <= routingTierRank[selected.ID]) {
+			if s.debugModelRoutingEnabled() {
+				logger.LegacyPrintf("service.gateway", "[ModelRoutingDebug] legacy mixed routed sticky hit: group_id=%v model=%s session=%s account=%d", derefGroupID(groupID), requestedModel, shortSessionHash(sessionHash), routedSticky.ID)
+			}
+			return routedSticky, nil
+		}
 		if selected != nil {
 			if sessionHash != "" && s.cache != nil {
 				if err := s.bindGatewayStickySessionDuringSelection(ctx, groupID, sessionHash, selected.ID); err != nil {
