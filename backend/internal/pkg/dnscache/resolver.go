@@ -77,6 +77,10 @@ func (r *Resolver) LookupHost(ctx context.Context, host string) ([]string, error
 // DialContext is a drop-in replacement for net.Dialer.DialContext that uses
 // cached DNS results. It can be assigned to http.Transport.DialContext.
 func (r *Resolver) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
+	// DNS lookup and all address attempts share one connection budget.
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
 	host, port, err := net.SplitHostPort(address)
 	if err != nil {
 		// If SplitHostPort fails, fall through to default dialer
@@ -99,14 +103,52 @@ func (r *Resolver) DialContext(ctx context.Context, network, address string) (ne
 		return nil, err
 	}
 
-	// Round-robin selection for load distribution
-	idx := atomic.AddUint64(&r.counter, 1)
-	addr := addrs[int(idx)%len(addrs)]
+	// Rotate the starting address for load distribution, but retain every
+	// compatible address for failover. Passing just one IP to net.Dialer
+	// prevents it from falling back when that IP (often IPv6) is unreachable.
+	candidates := make([]string, 0, len(addrs))
+	if len(addrs) > 0 {
+		start := int(atomic.AddUint64(&r.counter, 1) % uint64(len(addrs)))
+		for i := 0; i < len(addrs); i++ {
+			addr := addrs[(start+i)%len(addrs)]
+			ip := net.ParseIP(addr)
+			if ip == nil {
+				continue
+			}
+			if (network == "tcp4" || network == "udp4" || network == "ip4") && ip.To4() == nil {
+				continue
+			}
+			if (network == "tcp6" || network == "udp6" || network == "ip6") && ip.To4() != nil {
+				continue
+			}
+			candidates = append(candidates, addr)
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, &net.DNSError{Err: "no suitable address found", Name: host, IsNotFound: true}
+	}
 
-	return (&net.Dialer{
-		Timeout:   10 * time.Second,
-		KeepAlive: 30 * time.Second,
-	}).DialContext(ctx, network, net.JoinHostPort(addr, port))
+	deadline, _ := ctx.Deadline()
+	dialer := &net.Dialer{KeepAlive: 30 * time.Second}
+	var firstErr error
+	for i, addr := range candidates {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		// Reserve time for the remaining addresses even if this one silently
+		// drops packets rather than immediately returning a network error.
+		attemptTimeout := time.Until(deadline) / time.Duration(len(candidates)-i)
+		attemptCtx, attemptCancel := context.WithTimeout(ctx, attemptTimeout)
+		conn, err := dialer.DialContext(attemptCtx, network, net.JoinHostPort(addr, port))
+		attemptCancel()
+		if err == nil {
+			return conn, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
+	}
+	return nil, firstErr
 }
 
 // Refresh proactively resolves a host and updates the cache,
